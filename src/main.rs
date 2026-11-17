@@ -41,6 +41,12 @@ async fn main() {
     };
 
     tracing::info!("music-api listening on http://{addr}");
+    if SETTINGS.library.exclusive {
+        music_api::library::serve_bounded(listener, app, shutdown_signal())
+            .await
+            .expect("library server failed");
+        return;
+    }
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await

@@ -18,7 +18,7 @@ use axum::{
     extract::{Path, Query, Request, State},
     http::{HeaderMap, Method, StatusCode, header},
     middleware::{self, Next},
-    response::{IntoResponse, Response},
+    response::{IntoResponse, Redirect, Response},
     routing::{get, post},
 };
 use futures::{StreamExt, stream};
@@ -43,7 +43,7 @@ use tower_http::{
         predicate::{DefaultPredicate, Predicate},
     },
     cors::CorsLayer,
-    services::ServeDir,
+    services::{ServeDir, ServeFile},
     trace::TraceLayer,
 };
 
@@ -478,32 +478,62 @@ fn start_state() -> AppState {
 }
 
 fn app_with_state(state: AppState, serve_web: bool) -> Router {
-    let accounts = state.accounts.clone();
-    let router = Router::new()
-        .route("/health", get(health))
-        .route("/api/v1/platforms", get(platforms))
-        .route("/api/v1/search", get(search))
-        .route("/api/v1/recommendations", get(recommendations))
-        .route("/api/v1/recommendations/home", get(recommendation_home))
-        .route(
-            "/api/v1/recommendations/continue",
-            get(recommendation_continuation).post(recommendation_continuation_post),
-        )
-        .route("/api/v1/collections/resolve", get(resolve_collection))
-        .route("/api/v1/collections/match", post(match_collection))
-        .route("/api/v1/lyrics", get(lyrics))
-        .route("/api/v1/tracks/:platform/:id", get(track_info))
-        .route("/api/v1/playbacks", post(create_download))
-        .route("/api/v1/playbacks/:id", get(get_download))
-        .route("/api/v1/playbacks/:id/audio", get(download_file))
-        .route("/api/v1/playbacks/:id/audio/stream", get(download_stream))
-        .route("/api/v1/playbacks/:id/cover", get(download_cover))
-        .route("/api/v1/playbacks/:id/lyrics", get(download_lyrics))
-        .route("/api/v1/playbacks/:id/loudness", get(playback_loudness))
-        .with_state(state)
-        .merge(crate::accounts::router(accounts));
+    app_with_library(state, serve_web, &SETTINGS.library)
+}
 
-    let router = if serve_web {
+fn app_with_library(
+    state: AppState,
+    serve_web: bool,
+    library: &crate::settings::Library,
+) -> Router {
+    assert!(
+        !library.exclusive || !library.config_file.trim().is_empty(),
+        "library.exclusive requires library.config_file"
+    );
+    let accounts = state.accounts.clone();
+    let router = if library.exclusive {
+        Router::new().route("/health", get(health))
+    } else {
+        Router::new()
+            .route("/health", get(health))
+            .route("/api/v1/platforms", get(platforms))
+            .route("/api/v1/search", get(search))
+            .route("/api/v1/recommendations", get(recommendations))
+            .route("/api/v1/recommendations/home", get(recommendation_home))
+            .route(
+                "/api/v1/recommendations/continue",
+                get(recommendation_continuation).post(recommendation_continuation_post),
+            )
+            .route("/api/v1/collections/resolve", get(resolve_collection))
+            .route("/api/v1/collections/match", post(match_collection))
+            .route("/api/v1/lyrics", get(lyrics))
+            .route("/api/v1/tracks/:platform/:id", get(track_info))
+            .route("/api/v1/playbacks", post(create_download))
+            .route("/api/v1/playbacks/:id", get(get_download))
+            .route("/api/v1/playbacks/:id/audio", get(download_file))
+            .route("/api/v1/playbacks/:id/audio/stream", get(download_stream))
+            .route("/api/v1/playbacks/:id/cover", get(download_cover))
+            .route("/api/v1/playbacks/:id/lyrics", get(download_lyrics))
+            .route("/api/v1/playbacks/:id/loudness", get(playback_loudness))
+            .with_state(state)
+            .merge(crate::accounts::router(accounts))
+    }
+    .merge(crate::library::configured_router(&library.config_file));
+
+    let router = if serve_web && library.exclusive {
+        // Register the needed subtree, rather than relying on a proxy path
+        // denylist or falling back to the combined site's entire web root.
+        router
+            .route("/", get(|| async { Redirect::temporary("/library/") }))
+            .nest_service(
+                "/library",
+                ServeDir::new("web/library")
+                    .append_index_html_on_directories(true)
+                    .precompressed_br()
+                    .precompressed_gzip(),
+            )
+            .route_service("/source.tar.gz", ServeFile::new("web/source.tar.gz"))
+    } else if serve_web {
         // The frontend build writes `.br`/`.gz` siblings; serve them directly
         // instead of compressing static assets on every request.
         router.fallback_service(
@@ -517,8 +547,10 @@ fn app_with_state(state: AppState, serve_web: bool) -> Router {
     };
     // Apply after the fallback is installed, so extractor failures, method
     // rejections and missing static/API routes receive the same safe policy.
-    router
-        .layer(CorsLayer::permissive().expose_headers([
+    let router = if library.exclusive {
+        router.layer(middleware::from_fn(library_site_headers))
+    } else {
+        router.layer(CorsLayer::permissive().expose_headers([
             header::CONTENT_TYPE,
             header::CONTENT_LENGTH,
             header::CONTENT_RANGE,
@@ -529,6 +561,8 @@ fn app_with_state(state: AppState, serve_web: bool) -> Router {
             header::ETAG,
             header::HeaderName::from_static("x-audio-stream-id"),
         ]))
+    };
+    router
         .layer(TraceLayer::new_for_http())
         .layer(middleware::from_fn(response_cache_policy))
         // Search, recommendation and collection payloads are verbose JSON.
@@ -546,6 +580,32 @@ fn app_with_state(state: AppState, serve_web: bool) -> Router {
                 },
             )),
         )
+}
+
+async fn library_site_headers(request: Request, next: Next) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        header::HeaderValue::from_static("frame-ancestors 'none'"),
+    );
+    headers.insert(
+        header::X_FRAME_OPTIONS,
+        header::HeaderValue::from_static("DENY"),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        header::HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        header::REFERRER_POLICY,
+        header::HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        "cross-origin-resource-policy",
+        header::HeaderValue::from_static("same-origin"),
+    );
+    response
 }
 
 fn media_base_url(value: Option<&str>) -> Result<Option<url::Url>, &'static str> {
@@ -3221,6 +3281,89 @@ mod tests {
     }
 
     #[tokio::test]
+    #[should_panic(expected = "library.exclusive requires library.config_file")]
+    async fn exclusive_site_requires_a_library_configuration() {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, _) = test_cache_state(directory.path());
+        let _ = app_with_library(
+            state,
+            false,
+            &crate::settings::Library {
+                config_file: String::new(),
+                exclusive: true,
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn exclusive_site_omits_shared_routes_while_combined_site_retains_them() {
+        let directory = tempfile::tempdir().unwrap();
+        let policy = directory.path().join("policy.json");
+        std::fs::write(&policy, br#"{"instanceId":"test","tracks":[]}"#).unwrap();
+        let file = directory.path().join("library.json");
+        std::fs::write(
+            &file,
+            serde_json::to_vec(&serde_json::json!({
+                "origin":"https://music.example.test",
+                "source":{"instanceId":"test","baseUrl":"http://127.0.0.1:9",
+                    "auth":{"username":"test","salt":"test","token":"0".repeat(32)}},
+                "policyFile":policy,"cacheDir":directory.path().join("cache")
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        for exclusive in [false, true] {
+            let (state, _) = test_cache_state(directory.path());
+            let settings = crate::settings::Library {
+                config_file: if exclusive {
+                    file.to_string_lossy().into_owned()
+                } else {
+                    String::new()
+                },
+                exclusive,
+            };
+            let app = app_with_library(state, false, &settings);
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let origin = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            for route in ["/api/v1/platforms", "/api/v1/auth/config"] {
+                let response = client.get(format!("{origin}{route}")).send().await.unwrap();
+                assert_eq!(
+                    response.status(),
+                    if exclusive {
+                        StatusCode::NOT_FOUND
+                    } else {
+                        StatusCode::OK
+                    }
+                );
+                if exclusive {
+                    assert_eq!(response.headers()[header::X_FRAME_OPTIONS], "DENY");
+                    assert!(
+                        response
+                            .headers()
+                            .get(header::ACCESS_CONTROL_ALLOW_ORIGIN)
+                            .is_none()
+                    );
+                }
+                response.bytes().await.unwrap();
+            }
+            if exclusive {
+                let response = client
+                    .get(format!("{origin}/api/v1/library/session"))
+                    .header(header::HOST, "music.example.test")
+                    .send()
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                assert!(response.json::<serde_json::Value>().await.unwrap()["user"].is_null());
+            }
+            server.abort();
+            let _ = server.await;
+        }
+    }
+
+    #[tokio::test]
     async fn audio_cache_sweep_evicts_idle_copies_but_never_running_tasks() {
         let directory = tempfile::tempdir().unwrap();
         let (state, mut cached) = test_cache_state(directory.path());
@@ -3234,10 +3377,17 @@ mod tests {
             std::fs::write(dir.join("audio.m4a"), vec![0; 64]).unwrap();
             if old {
                 for path in [dir.join("audio.m4a"), dir.clone()] {
-                    std::fs::File::open(path)
-                        .unwrap()
-                        .set_modified(days_ago)
-                        .unwrap();
+                    let mut options = std::fs::OpenOptions::new();
+                    #[cfg(windows)]
+                    {
+                        use std::os::windows::fs::OpenOptionsExt;
+                        // Set timestamps on both files and directories without
+                        // requesting generic write access to the directory.
+                        options.access_mode(0x0100).custom_flags(0x0200_0000);
+                    }
+                    #[cfg(not(windows))]
+                    options.read(true);
+                    options.open(path).unwrap().set_modified(days_ago).unwrap();
                 }
             }
             dir
@@ -3431,9 +3581,11 @@ mod tests {
         });
         let client = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
             .build()
             .unwrap();
         for (path, bytes) in urls {
+            #[cfg(unix)]
             let mut identity = None;
             for host in ["app.example.test", "media.example.test"] {
                 for range in [None, Some("bytes=4-12")] {
@@ -3473,12 +3625,17 @@ mod tests {
                             format!("bytes 4-12/{}", bytes.len())
                         );
                     }
-                    let actual_identity = response.headers()["x-audio-stream-id"].clone();
-                    if let Some(identity) = &identity {
-                        assert_eq!(&actual_identity, identity);
-                    } else {
-                        identity = Some(actual_identity);
+                    #[cfg(unix)]
+                    {
+                        let actual_identity = response.headers()["x-audio-stream-id"].clone();
+                        if let Some(identity) = &identity {
+                            assert_eq!(&actual_identity, identity);
+                        } else {
+                            identity = Some(actual_identity);
+                        }
                     }
+                    #[cfg(not(unix))]
+                    assert!(!response.headers().contains_key("x-audio-stream-id"));
                     assert_eq!(response.bytes().await.unwrap().as_ref(), expected);
                 }
             }

@@ -1,35 +1,95 @@
+import { validateAlacStreamBlob } from "../utils/alac-stream.js";
+
 const DB_NAME = "music-splayer-web-cache-v1";
 const STORE = "tracks";
 const LIMIT_BYTES = 1_500 * 1024 * 1024;
 
 let dbPromise;
+let cachedDatabase;
 let trimPromise = Promise.resolve();
 const activeAudioDownloads = new Map();
 
-function openDb() {
-  if (dbPromise) return dbPromise;
-  dbPromise = new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore(STORE);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-  return dbPromise;
+function releaseDatabase(db) {
+  if (cachedDatabase === db) { cachedDatabase = null; dbPromise = null; }
+  db.close();
 }
 
-function tx(mode, handler) {
-  return openDb().then(
+function openDb() {
+  if (dbPromise) return dbPromise;
+  const opening = new Promise((resolve, reject) => {
+    let request, settled = false;
+    const fail = error => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); reject(error);
+    };
+    // A blocked or stalled open is optional storage, not an infinite gate for online playback.
+    const timer = setTimeout(() => fail(new DOMException("本地音频存储连接超时，请重试", "TimeoutError")), 3000);
+    try {
+      request = indexedDB.open(DB_NAME, 1);
+      request.onupgradeneeded = () => {
+        if (settled) { request.transaction.abort(); return; }
+        if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE);
+      };
+      request.onblocked = () => fail(new DOMException("本地音频存储被其他页面占用，请稍后重试", "InvalidStateError"));
+      request.onerror = () => fail(request.error || new Error("本地音频存储无法打开"));
+      request.onsuccess = () => {
+        const db = request.result;
+        if (settled) { db.close(); return; }
+        settled = true; clearTimeout(timer); cachedDatabase = db;
+        db.onversionchange = () => releaseDatabase(db);
+        db.onclose = () => { if (cachedDatabase === db) { cachedDatabase = null; dbPromise = null; } };
+        resolve(db);
+      };
+    } catch (error) { fail(error); }
+  });
+  dbPromise = opening;
+  // A rejected open must not poison every future attempt in this page.
+  void opening.catch(() => { if (dbPromise === opening) dbPromise = null; });
+  return opening;
+}
+
+function tx(mode, handler, { signal, timeoutMs = mode === "readonly" ? 3000 : 0 } = {}) {
+  signal?.throwIfAborted();
+  const execute = retry => openDb().then(
     (db) =>
       new Promise((resolve, reject) => {
-        const transaction = db.transaction(STORE, mode);
-        const result = handler(transaction.objectStore(STORE));
-        transaction.oncomplete = () => resolve(
+        signal?.throwIfAborted();
+        let transaction;
+        try { transaction = db.transaction(STORE, mode); }
+        catch (error) {
+          // Reopen only before any request was submitted. Failed writes are never retried implicitly.
+          if (retry && error.name === "InvalidStateError") {
+            releaseDatabase(db); resolve(execute(false)); return;
+          }
+          reject(error); return;
+        }
+        let result, settled = false, timer;
+        const finish = (callback, value) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", cancelled);
+          callback(value);
+        };
+        // IDB callbacks run after the Promise executor. Catch their synchronous
+        // write errors explicitly so quota failures cannot become page errors
+        // or be mistaken for a user cancellation.
+        const fail = (error) => {
+          finish(reject, error);
+          try { transaction.abort(); } catch { /* Already completed or aborted. */ }
+        };
+        const cancelled = () => fail(signal.reason || new DOMException("音频缓存写入已取消", "AbortError"));
+        transaction.oncomplete = () => finish(resolve,
           result && typeof result === "object" && "result" in result ? result.result : result,
         );
-        transaction.onerror = () => reject(transaction.error);
-        transaction.onabort = () => reject(transaction.error || new Error("音频缓存写入已取消"));
+        transaction.onerror = (event) => fail(event.target.error || transaction.error || new Error("音频缓存操作失败"));
+        transaction.onabort = () => finish(reject, transaction.error || new Error("音频缓存写入已取消"));
+        signal?.addEventListener("abort", cancelled, { once: true });
+        if (timeoutMs) timer = setTimeout(() => fail(new DOMException("本地音频存储读取超时，请重试", "TimeoutError")), timeoutMs);
+        try { result = handler(transaction.objectStore(STORE), fail); } catch (error) { fail(error); }
       }),
   );
+  return execute(true);
 }
 
 export function cacheKey(task) {
@@ -47,34 +107,37 @@ export function cacheKey(task) {
   return base;
 }
 
-export function getCachedTrack(key) {
-  return tx("readonly", (store) => store.get(key));
+export function getCachedTrack(key, options) {
+  return tx("readonly", (store) => store.get(key), options);
 }
 
-export async function putCachedTrack(key, value) {
+export async function putCachedTrack(key, value, { signal } = {}) {
   if (!key) return null;
   const hasIncomingBlob = Object.prototype.hasOwnProperty.call(value || {}, "blob");
   let hadBlob = false;
   // Read and merge in the same transaction: a late metadata refresh must not
   // overwrite audio that finished caching between a separate read and write.
-  await tx("readwrite", (store) => {
+  await tx("readwrite", (store, fail) => {
     const request = store.get(key);
     request.onsuccess = () => {
-      const existing = request.result;
-      hadBlob = hasCachedAudio(existing);
-      store.put(
-        {
-          ...existing,
-          ...value,
-          blob: value.blob ?? existing?.blob ?? null,
-          content_type: value.content_type ?? existing?.content_type ?? value.track?.content_type ?? "",
+      try {
+        signal?.throwIfAborted();
+        const existing = request.result;
+        hadBlob = hasCachedAudio(existing);
+        store.put(
+          {
+            ...existing,
+            ...value,
+            blob: value.blob ?? existing?.blob ?? null,
+            content_type: value.content_type ?? existing?.content_type ?? value.track?.content_type ?? "",
+            key,
+            touched_at: Date.now(),
+          },
           key,
-          touched_at: Date.now(),
-        },
-        key,
-      );
+        );
+      } catch (error) { fail(error); }
     };
-  });
+  }, { signal });
   // Serialise eviction passes. Several player paths can finish at the same
   // time (active-track cache plus a prefetch), and concurrent trim scans used
   // to race and occasionally evict a record written by the other scan.
@@ -87,11 +150,13 @@ export async function putCachedTrack(key, value) {
 
 export async function touchCachedTrack(key) {
   let item = null;
-  await tx("readwrite", (store) => {
+  await tx("readwrite", (store, fail) => {
     const request = store.get(key);
     request.onsuccess = () => {
-      item = request.result || null;
-      if (item) store.put({ ...item, touched_at: Date.now() }, key);
+      try {
+        item = request.result || null;
+        if (item) store.put({ ...item, touched_at: Date.now() }, key);
+      } catch (error) { fail(error); }
     };
   });
   return item;
@@ -222,11 +287,7 @@ export async function cacheAudioBlob(key, url, task, track, { signal, blob: comp
     if (!blob.size) throw new Error("音频本地缓存失败：文件为空");
     contentType ||= track?.content_type || "";
     if ((task?.streaming_mode || track?.streaming_mode) === "wasm_alac") {
-      const header = new Uint8Array(await blob.slice(0, 24).arrayBuffer());
-      if (header.length !== 24 || new TextDecoder().decode(header.subarray(0, 8)) !== "SPLALAC1" ||
-          new DataView(header.buffer).getUint32(8) !== 2) {
-        throw new Error("音频本地缓存失败：无损流格式不匹配");
-      }
+      await validateAlacStreamBlob(blob, { signal });
       contentType = "application/x-splayer-alac";
     }
     if (signal?.aborted) throw new DOMException("音频缓存已取消", "AbortError");
@@ -255,24 +316,13 @@ export async function cacheAudioBlob(key, url, task, track, { signal, blob: comp
   }
 }
 
-export function deleteCachedTrack(key) {
-  return tx("readwrite", (store) => store.delete(key));
+export function deleteCachedTrack(key, options) {
+  return tx("readwrite", (store) => store.delete(key), options);
 }
 
-export async function listCachedTracks() {
-  const db = await openDb();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(STORE, "readonly");
-    const request = transaction.objectStore(STORE).getAll();
-    request.onsuccess = () => {
-      resolve(
-        request.result
-          .filter(Boolean)
-          .sort((a, b) => (b.touched_at ?? 0) - (a.touched_at ?? 0)),
-      );
-    };
-    request.onerror = () => reject(request.error);
-  });
+export async function listCachedTracks(options) {
+  const records = await tx("readonly", store => store.getAll(), options);
+  return records.filter(Boolean).sort((a, b) => (b.touched_at ?? 0) - (a.touched_at ?? 0));
 }
 
 export function clearCache() {

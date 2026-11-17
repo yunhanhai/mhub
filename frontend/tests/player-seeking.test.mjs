@@ -292,7 +292,11 @@ test('native drag publishes target and keeps paused audio paused after seeked', 
   assert.equal(h.audio.currentTime,70); assert.equal(h.audio.paused,true); assert.equal(h.status.state,'paused');
 });
 
-test('a native stream accepts a future target and resumes only when those bytes are seekable', async () => {
+test('a native stream accepts a future target and resumes only when those bytes are seekable', async (t) => {
+  // The simulated audio stays at its target until this test advances time.
+  // Keep the interpolation clock aligned instead of reading elapsed wall time.
+  let nowMs = 1000;
+  t.mock.method(performance, 'now', () => nowMs);
   const h = await harness({ streaming: true }); await h.player.play(); h.player.seek(80000);
   assert.equal(h.status.position,80000); assert.equal(h.status.state,'buffering'); assert.equal(h.audio.paused,true);
   assert.deepEqual(h.audio.assignments,[]); assert.equal(clock.isPlaying(),false);
@@ -300,6 +304,8 @@ test('a native stream accepts a future target and resumes only when those bytes 
   h.audio.buffered=ranges([[0,90]]); h.audio.emit('progress');
   assert.deepEqual(h.audio.assignments,[80]); h.audio.finish(); await tick();
   assert.equal(h.status.state,'playing'); assert.equal(h.audio.paused,false); assert.equal(h.status.position,80000);
+  nowMs += 250;
+  assert.equal(clock.getCurrentTime(),80250,'resumed playback advances from the confirmed native target');
 });
 
 test('stale streaming metadata does not prohibit seeking within the actual seekable range', async () => {
@@ -327,11 +333,18 @@ test('switching songs aborts and ignores late completion from an old pending see
   assert.equal(signal.aborted,true); assert.equal(h.audio.src,'test:two'); assert.equal(h.status.position,0);
 });
 
-test('seek during cold source resolution is retained and applied before playback', async () => {
+test('seek during cold source resolution is retained and applied before playback', async (t) => {
+  // The fake media clock stays at 45s until explicitly advanced. Keep the
+  // real progress interpolator on the same clock instead of letting machine
+  // scheduling add a millisecond between finish() and the exact assertion.
+  let nowMs = 1000;
+  t.mock.method(performance, 'now', () => nowMs);
   const source=deferred(); const h=await harness({resolver:()=>source.promise});
   const loading=h.player.playAtIndex(1); h.player.seek(45000);
   assert.equal(h.status.position,45000); source.resolve({source:'test:two',track:h.tracks[1]}); await loading;
   assert.deepEqual(h.audio.assignments,[45]); h.audio.finish(); await tick(); assert.equal(h.status.position,45000); assert.equal(h.status.state,'playing');
+  nowMs += 250;
+  assert.equal(clock.getCurrentTime(), 45250, 'playback advances from the retained seek target after output starts');
 });
 
 test('ALAC accepts forward seeks while its complete Blob is still unavailable', async () => {

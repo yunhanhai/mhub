@@ -30,6 +30,7 @@ const source = (await readFile(new URL("../src/core/player/alac-player.js", impo
   .replace('from "./audio-output.js";', `from ${JSON.stringify(new URL("../src/core/player/audio-output.js", import.meta.url).href)};`)
   .replace('from "./alac-support.js";', `from ${JSON.stringify(new URL("../src/core/player/alac-support.js", import.meta.url).href)};`)
   .replace('from "./pcm-scheduler.js";', `from ${JSON.stringify(new URL("../src/core/player/pcm-scheduler.js", import.meta.url).href)};`)
+  .replace('from "../../utils/alac-stream.js";', `from ${JSON.stringify(new URL("../src/utils/alac-stream.js", import.meta.url).href)};`)
   .replace('import initAlacWasm, { AlacDecoder } from "../../wasm/alac-decoder/alac_decoder.js";', 'const initAlacWasm = async () => {}; const AlacDecoder = globalThis.__alacTestDecoder;');
 const { AlacPlayer, createStreamResampler } = await import(`data:text/javascript;base64,${Buffer.from(source).toString("base64")}`);
 // Stop every player after its test so no scheduler pump keeps Node alive.

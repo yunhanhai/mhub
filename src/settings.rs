@@ -7,6 +7,7 @@ lazy_static! {
 }
 
 #[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct Settings {
     #[serde(default)]
     pub bot: Bot,
@@ -20,6 +21,20 @@ pub struct Settings {
     pub audio_cache: AudioCache,
     #[serde(default)]
     pub gateway: Gateway,
+    #[serde(default)]
+    pub library: Library,
+}
+
+/// Authorized original-file library. Disabled unless a private config is set.
+#[derive(Debug, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct Library {
+    #[serde(default)]
+    pub config_file: String,
+    /// Expose only the authorized library, its page, source and health routes.
+    /// This requires config_file; the existing combined site remains default.
+    #[serde(default)]
+    pub exclusive: bool,
 }
 
 /// Loopback API that lends MHub's music sources to other local services,
@@ -312,12 +327,23 @@ impl Default for AppleMusic {
 
 impl Settings {
     fn load() -> Self {
-        let path = env::var("MUSIC_API_CONFIG").unwrap_or_else(|_| "data/conf.toml".to_string());
-        match fs::read_to_string(&path) {
-            Ok(content) => toml::from_str(&content).unwrap_or_else(|err| {
-                panic!("failed to parse config {path}: {err}");
+        match env::var("MUSIC_API_CONFIG") {
+            Ok(path) => Self::from_path(&path, true),
+            Err(env::VarError::NotPresent) => Self::from_path("data/conf.toml", false),
+            Err(_) => panic!("MUSIC_API_CONFIG is not a valid path"),
+        }
+    }
+
+    fn from_path(path: &str, required: bool) -> Self {
+        match fs::read_to_string(path) {
+            Ok(content) => toml::from_str(&content).unwrap_or_else(|_| {
+                // TOML diagnostics may quote a line containing credentials.
+                panic!("failed to parse config {path}; check its syntax and field names");
             }),
-            Err(_) => Settings::default(),
+            Err(error) if !required && error.kind() == std::io::ErrorKind::NotFound => {
+                Self::default()
+            }
+            Err(error) => panic!("failed to read config {path}: {error}"),
         }
     }
 }
@@ -361,6 +387,40 @@ fn default_apple_wrapper_lite_batch_size() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_config_does_not_fall_back_to_the_default_site() {
+        let directory = tempfile::tempdir().unwrap();
+        let missing = directory.path().join("missing.toml");
+        let missing = missing.to_str().unwrap();
+        assert!(
+            Settings::from_path(missing, false)
+                .library
+                .config_file
+                .is_empty()
+        );
+        assert!(std::panic::catch_unwind(|| Settings::from_path(missing, true)).is_err());
+        assert!(
+            std::panic::catch_unwind(|| Settings::from_path(
+                directory.path().to_str().unwrap(),
+                true
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn exposure_configuration_rejects_misspelled_fields() {
+        for value in ["[libray]\nexclusive=true", "[library]\nexclusiv=true"] {
+            assert!(toml::from_str::<Settings>(value).is_err());
+        }
+        assert!(
+            toml::from_str::<Settings>("[library]\nexclusive=true")
+                .unwrap()
+                .library
+                .exclusive
+        );
+    }
 
     #[test]
     fn public_example_uses_empty_runtime_credentials() {

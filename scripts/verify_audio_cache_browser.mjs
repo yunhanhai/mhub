@@ -62,9 +62,15 @@ try {
     phase = "clear IndexedDB";
     await cache.clearCache();
     phase = "persist initial packet Blob";
-    const bytes = new Uint8Array(64);
+    // A structurally complete packet stream. This cache test does not decode
+    // its synthetic payload; the ALAC playback regression covers real PCM.
+    const bytes = new Uint8Array(60);
     bytes.set(new TextEncoder().encode("SPLALAC1"));
-    new DataView(bytes.buffer).setUint32(8, 2);
+    const framing = new DataView(bytes.buffer);
+    framing.setUint32(8, 2); framing.setUint32(12, 44100);
+    bytes[16] = 2; bytes[17] = 16;
+    framing.setUint16(18, 24); framing.setUint32(20, 4096);
+    framing.setUint32(48, 4); framing.setUint32(52, 1024);
     const blob = new Blob([bytes], { type: "application/x-splayer-alac" });
     const task = { platform: "test", track_id: "1", quality: "lossless", streaming_mode: "wasm_alac" };
     const key = cache.cacheKey(task);
@@ -92,6 +98,15 @@ try {
     try { await cache.cacheAudioBlob(`${key}:invalid`, null, task, task, { blob: new Blob(["not an ALAC stream"]) }); }
     catch { rejected = true; }
     check(rejected && !(await cache.getCachedTrack(`${key}:invalid`)), "incorrect representation is rejected");
+    for (const [name, end] of [["truncated packet", bytes.length - 1], ["header only", 48], ["truncated cookie", 30]]) {
+      const invalidKey = `${key}:${name}`;
+      let rejected = false;
+      try { await cache.cacheAudioBlob(invalidKey, null, task, task, { blob: blob.slice(0, end, blob.type) }); }
+      catch { rejected = true; }
+      check(rejected && !(await cache.getCachedTrack(invalidKey)), `${name} never becomes a complete cache entry`);
+      const retry = await cache.cacheAudioBlob(invalidKey, null, task, task, { blob });
+      check(cache.hasCachedAudio(retry) && retry.blob.size === bytes.length, `${name} can retry with complete bytes`);
+    }
     const priorities = [];
     window.fetch = async (_url, options) => {
       fetches++;
@@ -210,7 +225,7 @@ try {
   assert.equal(nativePlayback.error, null);
   assert.ok(nativePlayback.time > 0.2);
   results.push(`complete legacy FLAC plays through native audio after a trusted click${offlinePlayback ? " with the browser offline" : ""}`);
-  assert.equal(results.length, 16);
+  assert.equal(results.length, 22);
   console.log(JSON.stringify({ browser: browserName, offlinePlayback, passed: results.length, nativePlayback, checks: results }, null, 2));
 } finally {
   await persistentContext?.close();

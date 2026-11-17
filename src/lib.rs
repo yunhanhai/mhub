@@ -3,6 +3,7 @@ pub mod api;
 pub mod audio;
 mod audio_cache;
 pub mod cache;
+pub mod library;
 mod loudness;
 pub mod lyric_tags;
 pub mod matching;

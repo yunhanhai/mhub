@@ -1,5 +1,14 @@
 # Copy to config.toml (git-ignored). Empty credentials are intentional.
 # The application never sends these values to the frontend.
+[library]
+# Optional authorized Navidrome original-file library at /api/v1/library.
+# Keep source credentials, policy and cache outside the public web/source tree.
+# See docs/architecture.md for the private JSON config and access boundaries.
+config_file = ""
+# For a dedicated public library site, set true after supplying config_file.
+# Legacy shared-platform, account and sync routes are then not registered.
+exclusive = false
+
 [bot]
 owner = 0
 token = ""

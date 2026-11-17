@@ -12,6 +12,7 @@ const playerSource = (await readFile(new URL("../src/core/player/alac-player.js"
   .replace('from "./pcm-scheduler.js";', `from ${JSON.stringify(new URL("../src/core/player/pcm-scheduler.js", import.meta.url).href)};`)
   .replace('from "./audio-output.js";', `from ${JSON.stringify(new URL("../src/core/player/audio-output.js", import.meta.url).href)};`)
   .replace('from "./alac-support.js";', `from ${JSON.stringify(new URL("../src/core/player/alac-support.js", import.meta.url).href)};`)
+  .replace('from "../../utils/alac-stream.js";', `from ${JSON.stringify(new URL("../src/utils/alac-stream.js", import.meta.url).href)};`)
   .replace('import initAlacWasm, { AlacDecoder } from "../../wasm/alac-decoder/alac_decoder.js";', "const initAlacWasm = async () => {}; class AlacDecoder {}");
 const { canRequestAlacPlayback, canUseAlacPlayback } = await import(`data:text/javascript;base64,${Buffer.from(playerSource).toString("base64")}`);
 const appSource = await readFile(new URL("../src/App.vue", import.meta.url), "utf8");
