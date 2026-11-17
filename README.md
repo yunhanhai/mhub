@@ -1,18 +1,41 @@
 # MHub
 
-[![Verify](https://github.com/jizizr/mhub/actions/workflows/ci.yml/badge.svg)](https://github.com/jizizr/mhub/actions/workflows/ci.yml)
+> 本项目由 [艺の公益站](https://ultrarouter.org/sign-up?aff=KnwD) 提供支持。
+
+[![Verify](https://github.com/yunhanhai/mhub/actions/workflows/ci.yml/badge.svg)](https://github.com/yunhanhai/mhub/actions/workflows/ci.yml)
 [![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
 
-自托管的多平台音乐播放器。把 Apple Music、网易云、QQ 音乐等平台的搜索、歌单和推荐收进一个队列里，在浏览器里无损播放，界面按 Apple Music 网页版的布局和交互来做。
+自托管的音乐播放器，用一个队列连接多平台音乐，也可以接入自己的 Navidrome 曲库。Rust 后端、Vue 前端，支持浏览器无损播放、逐字歌词和公开曲目的离线收听。
 
-[部署指南](docs/deployment.md) · [架构说明](docs/architecture.md) · [参与贡献](CONTRIBUTING.md) · [许可证](#许可与版权)
+本仓库基于 [jizizr/mhub](https://github.com/jizizr/mhub) 开发，新增可选的授权曲库、原件校验、独立离线页面及播放恢复功能，沿用 **AGPL-3.0-only** 许可证。
+
+[GitHub](https://github.com/yunhanhai/mhub) · [Gitee](https://gitee.com/yunhanhai/mhub) · [快速启动](#快速启动) · [授权曲库](#授权曲库navidrome) · [部署指南](docs/deployment.md) · [架构说明](docs/architecture.md) · [参与贡献](CONTRIBUTING.md)
+
+## 功能
+
+| 能力 | 使用方式 |
+| --- | --- |
+| 多平台音乐 | 搜索、歌单导入、跨平台匹配；支持 Apple Music、网易云、QQ 音乐等平台，按需配置账号 |
+| 播放队列 | 追加、替换、下一首播放、拖动排序、随机与循环；可使用 Apple Music AutoPlay 推荐 |
+| 浏览器无损播放 | ALAC 通过 WASM 解码并交给 Web Audio，其他格式使用原生音频；音质按播放时设置选择 |
+| 歌词与界面 | 逐字歌词、简繁转换、封面取色背景，以及桌面和手机布局 |
+| PWA 与离线 | 可安装为应用；多平台音频与歌词使用 IndexedDB 缓存，独立曲库可显式保存公开曲目 |
+| 自有曲库 | 可选接入 Navidrome，为公开、受限曲目分别检查访问权限，原生播放 MP3 / FLAC |
+| 账号与同步 | 可选通行密钥登录、资料库跨设备同步，以及在另一台设备上接着听 |
+| 外部服务 | 可选回环音源网关，让同机 Telegram bot 等服务复用平台账号、下载和缓存 |
+
+平台能力取决于账号、地区和上游接口。后台续播使用预加载和 Media Session，具体表现仍需在目标手机与浏览器上验证。仓库不提供平台账号或媒体文件，Apple Music 需自行配置账号及 wrapper 服务。
+
+## 界面预览
+
+以下展示多平台播放器；可选的独立授权曲库位于 `/library/`。
 
 <p align="center">
-  <img src="docs/images/desktop-home.webp" alt="首页：推荐卡片从半透明侧栏下滑过，底部是悬浮播放条" width="100%">
+  <img src="docs/images/desktop-home.webp" alt="桌面首页：推荐列表、侧栏与底部播放条" width="100%">
 </p>
 <p align="center">
-  <img src="docs/images/desktop-playlist.webp" alt="歌单详情：随封面取色的页面背景" width="49%">
-  <img src="docs/images/desktop-lyrics.webp" alt="全屏歌词：逐字歌词与流动的封面背景" width="49%">
+  <img src="docs/images/desktop-playlist.webp" alt="歌单详情与封面取色背景" width="49%">
+  <img src="docs/images/desktop-lyrics.webp" alt="全屏逐字歌词" width="49%">
 </p>
 <p align="center">
   <img src="docs/images/mobile-home.webp" alt="手机首页" width="24%">
@@ -20,160 +43,26 @@
   <img src="docs/images/mobile-lyrics.webp" alt="手机全屏歌词" width="24%">
 </p>
 
-## 功能
-
-- **多平台**：搜索、歌单导入、跨平台匹配，同平台导入的歌单每天自动跟随原歌单同步。
-- **队列**：追加、替换、下一首播放、拖动排序、随机与循环；自动续播使用 Apple Music 的 AutoPlay 电台。
-- **无损播放**：ALAC 在浏览器里用 WASM 解码，按采样帧精确排程到 Web Audio 输出；其余格式走原生 `<audio>`。音质按播放时的设置选择。
-- **后台播放**：锁屏或切到后台时连续播放下一首，系统媒体通知和控制保持可用。
-- **歌词**：逐字歌词、流动的封面取色背景、简繁转换。
-- **离线**：音频和歌词缓存在 IndexedDB，可安装为 PWA，断网后已缓存的歌照常播放。
-- **账号（可选）**：通行密钥登录，资料库跨设备实时同步，在另一台设备上「接着听」。
-- **音源网关（可选）**：同机的 Telegram bot 等服务通过回环接口借用这里的平台账号、下载和 Telegram 缓存，账号只配置一处，同一首歌只下载一次（见 [部署文档](docs/deployment.md#外部服务)）。
-
-可用能力取决于各平台的账号、地区和上游接口。本仓库不提供任何账号、会话或媒体文件，Apple Music 播放需要自行配置账号和 wrapper 服务。
-
-## 技术栈
-
-| 部分 | 使用 |
-| --- | --- |
-| 后端 | Rust 2024 · Axum · Tokio · reqwest · sqlx（MySQL，可选）· yrs · webauthn-rs |
-| 前端 | Vue 3 · Pinia · Vite · Yjs · lucide 图标 |
-| 播放 | 原生 `<audio>` · Rust ALAC 解码器编译为 WASM · Web Audio 缓冲排程 · Media Session |
-| 歌词 | Apple Music-like Lyrics（AMLL）· OpenCC |
-| 部署 | Docker 多阶段构建 · Compose · 任意 HTTPS 反向代理 |
-
-## 架构
-
-### 部署层级
-
-```mermaid
-flowchart TB
-  subgraph L1["① 浏览器 / PWA"]
-    direction LR
-    UI["Vue 3 界面<br/>Pinia 队列与资料库"] ~~~ ENGINE["播放引擎<br/>主 audio + 预载 audio<br/>ALAC WASM → Web Audio"] ~~~ LOCAL[("IndexedDB<br/>音频 / 歌词缓存")] ~~~ SW["Service Worker<br/>Media Session"]
-  end
-
-  subgraph L2["② 接入层"]
-    direction LR
-    PROXY["反向代理<br/>TLS · 访问控制 · 不缓冲音频"] ~~~ MEDIA["媒体域 / CDN（可选）<br/>只缓存已完成的音频"]
-  end
-
-  subgraph L3["③ MHub 服务（Rust）"]
-    direction LR
-    API["HTTP API<br/>长轮询任务状态"] ~~~ TASK["播放任务<br/>去重 · 选源 · 并发闸门"] ~~~ ADAPTER["平台适配<br/>Apple Music · 网易云 · QQ …"] ~~~ REC["推荐<br/>AutoPlay 电台"] ~~~ SYNC["账号与同步<br/>通行密钥 · yrs"]
-  end
-
-  subgraph L4["④ 存储"]
-    direction LR
-    DISK[("数据卷<br/>解密后的音频 · ALAC 包")] ~~~ DB[("MySQL<br/>music_cache 索引 · 账号")] ~~~ TG[("Telegram<br/>Bot API 文件仓库")]
-  end
-
-  subgraph L5["⑤ 上游"]
-    direction LR
-    PLAT["各平台接口<br/>搜索 · 歌单 · 音频"] ~~~ WRAP["wrapper / wrapper-lite<br/>自建 Apple 解密服务"]
-  end
-
-  L1 <==>|"REST · 长轮询 · WebSocket · 音频 Range"| L2
-  L2 <==>|"HTTP"| L3
-  L3 <==>|"读写缓存 · 查索引 · 上传 / 拉取文件"| L4
-  L3 ==>|"取歌曲信息 · 下载加密分片 · 请求解密"| L5
-```
-
-### 一首歌的数据流
-
-```mermaid
-flowchart TD
-  PLAY(["用户点播：平台 + 歌曲 ID + 音质"]) --> T1{"内存里已有<br/>同一首歌的任务？"}
-  T1 -->|"有：共享同一份下载"| OUT
-  T1 -->|没有| Q[("查询 MySQL music_cache")]
-  Q -->|"命中 file_id"| HIT
-  Q -->|未命中| MISS
-
-  subgraph HIT["A. 命中：从 Telegram 取"]
-    direction TB
-    H1["getFile 取文件路径"] --> H2{"本地 Bot API<br/>共享目录可读？"}
-    H2 -->|是| H3["读本地文件"]
-    H2 -->|否| H4["按 Range 从 Telegram 拉流"]
-    H3 & H4 --> H5[("数据卷：已解密的完整 M4A")]
-    H5 --> H6["本地把 ALAC 拆成<br/>独立音频包 .alacstream"]
-  end
-
-  subgraph MISS["B. 未命中：边下边解边播"]
-    direction TB
-    M1["平台适配<br/>解析歌曲与音质"] --> M2["拉 HLS 播放列表与 init 段"]
-    M2 --> M3["下载下一个 fMP4 加密分片"]
-    M3 --> M4["wrapper-lite 解密这一片<br/>（失败回退 wrapper → Widevine）"]
-    M4 -.->|"循环直到最后一片"| M3
-    M4 ==>|"同一片解密数据<br/>同时写两路"| FORK{{" "}}
-
-    subgraph USER["用户流：首片解密完就能播"]
-      direction TB
-      U1[".streaming<br/>浏览器可播的 fMP4"]
-      U2[".alacstream<br/>ALAC 音频包"]
-    end
-
-    subgraph CACHE["缓存流：不阻塞播放"]
-      direction TB
-      C1[".assembled<br/>累积全部解密分片"] -->|"最后一片到齐"| C2["重封装为完整 M4A"]
-      C2 --> C3[("数据卷")]
-      C2 -->|"后台 sendAudio"| C4["上传 Telegram"]
-      C4 -->|"写入 file_id"| C5[("MySQL upsert")]
-    end
-
-    FORK ==> U1 & U2
-    FORK ==> C1
-  end
-
-  USER ==>|"任务转为 streaming<br/>长轮询通知浏览器"| OUT
-  H5 & H6 ==> OUT
-
-  subgraph OUT["C. 浏览器"]
-    direction TB
-    O1{"传输方式"}
-    O1 -->|"wasm_alac"| O2["fetch 音频包<br/>中断后按 Range 续传"]
-    O2 --> O3["WASM 解码 → Web Audio 排程"]
-    O1 -->|"原生"| O4["audio 元素 Range 请求"]
-    O3 & O4 --> O5[("写入 IndexedDB<br/>下次离线直接读")]
-  end
-```
-
-命中缓存时，Telegram 里存的就是解密后的完整文件，不再经过 wrapper；未命中时，每解密一片就同时写给用户和缓存，首片到手就能开播，Telegram 上传在整首下载完后后台进行，不占播放的时间。模块边界和账号同步的细节见[架构说明](docs/architecture.md)。
-
-## 实现思路
-
-**一首歌怎么播出来。** 前端只认「平台 + 歌曲 ID + 音质」。点击播放时，后端为这首歌建一个播放任务：选源、下载或解密、做响度分析，ALAC 再拆成独立的音频包，以流的方式交给浏览器。前端用长轮询等任务状态，而不是定时刷新。音频一边下一边播，同时写进 IndexedDB，下次直接从本地读。
-
-**为什么后台不会断。** 移动浏览器在一首歌结束后，会把这个播放器移出系统媒体会话，锁屏时通知随即消失，页面也可能被冻结。所以下一首完整缓存后，会预先放进第二个 `<audio>`，在当前曲结束前静音起播，结束瞬间无缝接上。系统看到的始终是一个正在播放的播放器。
-
-**续播推荐。** 和 Apple Music 网页版一样，用队列里最近十首歌创建 AutoPlay 电台，之后从同一个电台接着取。Apple 暂时不可用时，退回「同歌手 + 相似歌手」的推荐。
-
-**资料库同步。** 每个账号的歌单是一份 Yjs 文档，通过 WebSocket 实时同步，断网时先写本地副本，联网后自动合并，不会重复也不会丢。播放队列不进同步，只把最近的播放位置告诉其他设备，用来「接着听」。
-
-**界面。** 布局、字号、颜色和交互按 Apple Music 网页版实测的数值来做。悬浮播放条和手机底栏用 SVG 位移滤镜做出液态玻璃的折射，不支持的浏览器退回普通模糊。歌词和解码器都是按需加载的独立分块，首屏只加载需要的部分。
-
-## 项目优点
-
-- 一个队列放下多个平台的歌，不用来回切 App。
-- 浏览器里就能播 ALAC 无损，不依赖客户端。
-- 认真处理了移动端后台连播和系统媒体控制这类容易出问题的细节，并有回归测试覆盖。
-- 离线可用，换设备能接着听。
-- 部署简单：一个容器，非 root 运行、只读根文件系统，镜像里带当前版本的源码。
-
-## Docker 启动
+## 快速启动
 
 需要 Docker Engine 和 Docker Compose v2。首次构建会编译 Rust、ALAC WASM 和前端，耗时取决于机器与网络。
 
 ```sh
-git clone https://github.com/jizizr/mhub.git
+git clone https://github.com/yunhanhai/mhub.git
 cd mhub
 cp config.example.toml config.toml
 cp .env.example .env
-# 按需编辑 config.toml；空凭据也能启动界面和健康检查。
+# 按需编辑 config.toml；空凭据可启动界面和健康检查。
 docker compose up -d --build
 ```
 
-打开 <http://localhost:8000>。服务默认只绑定本机回环地址，对外请通过带访问控制的 HTTPS 反向代理提供。音乐 API 本身没有用户鉴权，不要把配置了共享账号的服务匿名暴露到公网。
+也可以从 Gitee 克隆：
+
+```sh
+git clone https://gitee.com/yunhanhai/mhub.git
+```
+
+打开 <http://localhost:8000>。默认只绑定本机回环地址；对外提供服务时使用带访问控制的 HTTPS 反向代理。多平台接口使用服务端配置的共享账号，应由反向代理保护；独立授权曲库另有会话与访问检查。
 
 ```sh
 docker compose ps
@@ -182,26 +71,64 @@ curl --fail http://localhost:8000/health
 docker compose down
 ```
 
-配置文件只读挂载，缓存保存在 `music-data` 命名卷中，`down` 不会删除缓存，`down -v` 会。升级、备份、外部服务和媒体域配置见[部署指南](docs/deployment.md)。
+配置文件只读挂载，缓存保存在 `music-data` 命名卷中。`docker compose down` 保留缓存，`down -v` 会删除卷。升级、备份、外部服务和媒体域配置见[部署指南](docs/deployment.md)。
+
+## 授权曲库（Navidrome）
+
+希望播放自己拥有或已获授权的原始音乐时，可以启用独立曲库。它复用 MHub 播放器，通过同源接口连接 Navidrome；浏览器不接收源端凭据。
+
+1. 准备 Navidrome、专用非管理员服务账号，以及包含曲目身份、大小、SHA-256 和访问规则的可信清单。
+2. 在仓库及构建上下文之外保存私有曲库 JSON、清单与缓存目录；字段示例见[架构说明](docs/architecture.md#授权曲库)。
+3. 在 `config.toml` 中启用曲库，并将这些路径按[部署指南](docs/deployment.md#可选授权曲库)挂载到容器。
+
+```toml
+[library]
+config_file = "/app/private/library.json"
+exclusive = true
+```
+
+`exclusive = true` 只提供授权曲库，根路径跳转到 `/library/`；设置为 `false` 可与多平台播放器共存。曲库默认关闭，配置修改后需重建服务进程。
+
+- **访问权限**：公开曲目由服务账号读取；受限曲目要求 Navidrome 用户登录，并同时检查清单与源端权限。该登录独立于 MHub 的通行密钥账号。
+- **原件与缓存**：首次播放等待完整 MP3 / FLAC，校验大小和 SHA-256 后发布；退出、取消或过期会使相应任务失效。
+- **离线收听**：先打开独立页面，再显式保存公开曲目。保存成功后可断网重开页面、浏览和播放；受限曲目不保存到浏览器。
+- **使用范围**：当前使用固定清单，最多 100 首、每文件 32 MiB，默认原件缓存预算 128 MiB；不支持此入口的 ALAC 或受限离线授权。
+
+接口、队列、失败恢复和缓存规则见[架构说明](docs/architecture.md#独立曲库离线页面)，测试素材与验证命令见[曲库验证说明](docs/deployment.md#授权曲库验证)。桌面检查不代表手机后台或公网部署已经验收。
+
+## 技术栈与结构
+
+| 部分 | 技术与入口 |
+| --- | --- |
+| 后端 | Rust · Axum · Tokio；`src/` 负责平台适配、播放任务、缓存和授权曲库 |
+| 前端 | Vue 3 · Pinia · Vite · Yjs；`frontend/src/` 负责界面、队列和浏览器缓存 |
+| 播放与歌词 | 原生音频 · ALAC WASM · Web Audio · Media Session · AMLL · OpenCC |
+| 可选存储 | MySQL 账号与缓存索引、Telegram 音频文件仓库 |
+| 开发与部署 | `frontend/tests/`、`scripts/`、`wasm/alac-decoder/`、Docker 与 Compose |
+
+完整的[部署层级与歌曲数据流](docs/architecture.md#架构图)放在架构文档中。
 
 ## 本地开发
 
-需要 Rust 1.96+、Node.js 22.12+、FFmpeg/FFprobe。后端默认监听 `127.0.0.1:8000`，前端开发服务把 API 代理到这个地址。
+需要 Rust 1.96+、Node.js 22.12+、FFmpeg / FFprobe。后端默认监听 `127.0.0.1:8000`，前端开发服务把 API 代理到该地址。以下环境变量命令使用 POSIX shell 语法。
 
 ```sh
 cp config.example.toml config.toml
-MUSIC_API_CONFIG=config.toml cargo run
+MUSIC_API_CONFIG=config.toml cargo run --locked
 ```
 
-另开一个终端：
+另开终端启动前端：
 
 ```sh
-cd frontend
-npm ci
-npm run dev
+npm --prefix frontend ci
+npm --prefix frontend run dev
 ```
 
-前端自带生成好的 ALAC 绑定，平时不用重新编译 WASM；改了解码器再按[解码器说明](wasm/alac-decoder/README.md)重建，Docker 总是从源码构建。
+PowerShell 中先用 `$env:MUSIC_API_CONFIG = 'config.toml'` 设置变量，再运行 `cargo run --locked`。需要后端同时提供 `/library/` 时，先运行 `npm --prefix frontend run build`，并设置 `MUSIC_API_SERVE_WEB=true`。
+
+前端带有生成好的 ALAC 绑定；修改解码器时按[解码器说明](wasm/alac-decoder/README.md)重建。Docker 始终从源码构建。
+
+提交前运行格式、相关测试和发布检查：
 
 ```sh
 cargo fmt --check
@@ -212,20 +139,13 @@ npm --prefix frontend run test:build
 python3 scripts/publication_check.py
 ```
 
-访问真实平台的测试默认跳过，需要自己提供配置后显式运行。自动化测试不能代替在真实手机上验证播放。
+访问真实平台的测试默认跳过，需要自行提供配置并显式运行。贡献约定见 [CONTRIBUTING.md](CONTRIBUTING.md)，安全问题请参考 [SECURITY.md](SECURITY.md)。
 
-```text
-src/                    Rust 服务、平台适配、音频、缓存与账号
-frontend/src/           Vue 界面、播放器、队列与浏览器缓存
-frontend/tests/         前端行为与音频管线回归测试
-wasm/alac-decoder/      独立的 Rust ALAC 解码器
-scripts/                浏览器回归与发布检查
-docs/                   架构与部署说明、README 图片
-```
+## 支持与致谢
 
-## 社区
+感谢 [艺の公益站](https://ultrarouter.org/sign-up?aff=KnwD) 为本项目提供支持，感谢 [LINUX DO](https://linux.do/) 社区。
 
-感谢 [LINUX DO](https://linux.do/) 社区。
+感谢原项目 [jizizr/mhub](https://github.com/jizizr/mhub) 及第三方开源作者。此版本的上游基线为 [6968bbf](https://github.com/jizizr/mhub/tree/6968bbfc0a26738a5f6126102d912eed78ad91bc)，来源说明与第三方许可保留在 [NOTICE](NOTICE) 和 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt)。
 
 ## 许可与版权
 
