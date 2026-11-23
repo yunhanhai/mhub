@@ -99,7 +99,8 @@ try {
   server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); throw error;
 }
 const report = { startedAt: new Date().toISOString(), checks, errors, scans, keyboardPaths,
-  scope: 'Actual built interface and Edge keyboard, native generated MP3 and accessibility tree. Simulated API with two labelled synthetic metadata records sharing one generated MP3. No backend authorization, physical device or spoken screen-reader verification.' };
+  browser: { engine: 'Chromium', version: browser.version(), executableSpecified: Boolean(process.env.BROWSER_EXECUTABLE) },
+  scope: 'Actual built interface and Chromium-family browser keyboard, native generated MP3 and accessibility tree. Simulated API with two labelled synthetic metadata records sharing one generated MP3. No backend authorization, physical device or spoken screen-reader verification.' };
 function check(name, passed, detail) { checks.push({ name, passed: Boolean(passed), ...(detail ? { detail } : {}) }); }
 async function fresh(width = 1440, height = 1000, theme = 'dark', touch = false) {
   const context = await browser.newContext({ viewport: { width, height }, serviceWorkers: 'allow', reducedMotion: 'reduce',
@@ -154,7 +155,7 @@ try {
   check('unconfirmed login moves focus to account retry', (await focusGeometry(uncertain)).id === 'retry-session' && (await focusGeometry(uncertain)).unobscured, await focusGeometry(uncertain));
   await uncertain.keyboard.press('Enter');
   await uncertain.waitForFunction(() => window.libraryLab.snapshot().sessionState === 'ready');
-  await uncertain.waitForFunction(() => document.activeElement.id === 'identity', { timeout: 2000 }).catch(() => {});
+  await uncertain.waitForFunction(() => document.activeElement.id === 'identity', null, { timeout: 2000 }).catch(() => {});
   const retryFocus = await focusGeometry(uncertain);
   check('account retry preserves a visible focus after its button disappears', retryFocus.id === 'identity' && retryFocus.unobscured, retryFocus);
 
@@ -176,7 +177,7 @@ try {
   check('seek exposes a named slider in browser accessibility tree', snapshot.some(n => n.role === 'slider' && n.name === '播放进度'), snapshot);
   check('seek supplies readable current and total time in ARIA', report.sliderDOM.valueText.includes('总时长') && report.sliderDOM.valueText.includes('0:30'), report.sliderDOM);
   report.accessibilityTreeLimitations = snapshot.filter(n => n.role === 'slider' && !String(n.valueText).includes(n.name === '音量' ? '%' : '总时长'))
-    .map(n => ({ name: n.name, valueText: n.valueText, note: 'This Edge build maps aria-valuetext to its numeric range value even in a standalone control. DOM attributes verified; speech output remains untested.' }));
+    .map(n => ({ name: n.name, valueText: n.valueText, note: 'Accessibility-tree value text differs from the supplied readable ARIA text. Raw tree value retained; DOM attributes verified separately. Spoken screen-reader output remains untested.' }));
   check('volume exposes a percentage to assistive technology', await playback.locator('#volume').getAttribute('aria-valuetext') === '35%');
   await playback.locator('#playback-queue .queue-remove').last().focus(); await playback.keyboard.press('Enter');
   check('queue removal retains a usable focus', (await focusGeometry(playback)).id !== '' || await playback.evaluate(() => Boolean(document.activeElement.closest('#playback-queue'))));
@@ -253,7 +254,7 @@ try {
   check('single touch tap seeks without requiring a drag', !tapped.state.seekInput.editing && tapped.state.state === 'paused'
     && Math.abs(tapped.state.seekInput.value - tapped.state.seekInput.max * .65) < 1 && tapped.events.filter(e => e.type === 'seeking').length === 1, tapped.events);
   await touchCdp.detach();
-  report.touchScope = 'CDP Input.dispatchTouchEvent on desktop Edge with touch/mobile context; no physical phone or lockscreen verification.';
+  report.touchScope = 'CDP Input.dispatchTouchEvent on a desktop Chromium-family browser with touch/mobile context; no physical phone or lockscreen verification.';
 
   const configurations = [[1440, 1000, 'dark'], [1440, 1000, 'light'], [375, 812, 'dark'], [320, 700, 'light'], [844, 390, 'dark']];
   for (const [width, height, theme] of configurations) {
