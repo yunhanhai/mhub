@@ -119,11 +119,16 @@ window.addEventListener('hashchange', navigationState);
 navigationState();
 function keepFocusedControlVisible() {
   const element = document.activeElement;
-  if (!(element instanceof HTMLElement) || !element.closest('main') || !element.getClientRects().length) return;
+  if (!(element instanceof HTMLElement) || !element.getClientRects().length) return;
+  const sidebar = element.closest('.sidebar');
+  if (!element.closest('main') && !sidebar) return;
   const rect = element.getBoundingClientRect(), playerTop = document.querySelector('.player').getBoundingClientRect().top;
-  const safeTop = 16, safeBottom = Math.min(innerHeight, playerTop) - 12;
+  const fixedSidebar = sidebar && getComputedStyle(sidebar).position === 'fixed';
+  const boundary = fixedSidebar ? sidebar.getBoundingClientRect() : null;
+  const safeTop = boundary ? boundary.top + 12 : 16;
+  const safeBottom = Math.min(innerHeight, playerTop, boundary ? boundary.bottom : innerHeight) - 12;
   const offset = rect.top < safeTop ? rect.top - safeTop : rect.bottom > safeBottom ? rect.bottom - safeBottom : 0;
-  if (Math.abs(offset) > .5) window.scrollBy({ top: offset, behavior: 'instant' });
+  if (Math.abs(offset) > .5) (fixedSidebar ? sidebar : window).scrollBy({ top: offset, behavior: 'instant' });
 }
 document.addEventListener('focusin', keepFocusedControlVisible);
 window.addEventListener('resize', keepFocusedControlVisible);

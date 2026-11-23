@@ -32,7 +32,7 @@ const tracks = ['First Light', 'Slow River'].map((title, index) => {
     format: 'mp3', content_type: 'audio/mpeg', byte_size: audio.length, access: 'public', offlineAllowed: true, streaming_mode: '' };
 });
 const users = new Map(), tasks = new Map(), checks = [], errors = [], scans = [], contexts = [], keyboardPaths = [];
-let sessionDelay = 0, failNextMutation = false;
+let sessionDelay = 0, failNextMutation = false, failNextTask = false;
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const json = (response, status, value, headers = {}) => {
   response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers });
@@ -61,6 +61,7 @@ const server = createServer(async (request, response) => {
       let body = ''; for await (const chunk of request) body += chunk;
       const input = JSON.parse(body), track = tracks.find(t => t.songId === input.songId);
       if (!track) return json(response, 404, { error: { code: 'track_missing', message: '没有这首测试曲目' } });
+      if (failNextTask) { failNextTask = false; return json(response, 503, { error: { code: 'source_unavailable', message: '测试音频暂时不可用，请重试播放。' } }); }
       const id = randomUUID().replaceAll('-', ''); tasks.set(id, track);
       return json(response, 200, { id, state: 'ready', track, mediaUrl: origin + '/api/v1/library/tasks/' + id + '/audio' });
     }
@@ -100,8 +101,9 @@ try {
 const report = { startedAt: new Date().toISOString(), checks, errors, scans, keyboardPaths,
   scope: 'Actual built interface and Edge keyboard, native generated MP3 and accessibility tree. Simulated API with two labelled synthetic metadata records sharing one generated MP3. No backend authorization, physical device or spoken screen-reader verification.' };
 function check(name, passed, detail) { checks.push({ name, passed: Boolean(passed), ...(detail ? { detail } : {}) }); }
-async function fresh(width = 1440, height = 1000, theme = 'dark') {
-  const context = await browser.newContext({ viewport: { width, height }, serviceWorkers: 'allow', reducedMotion: 'reduce' }); contexts.push(context);
+async function fresh(width = 1440, height = 1000, theme = 'dark', touch = false) {
+  const context = await browser.newContext({ viewport: { width, height }, serviceWorkers: 'allow', reducedMotion: 'reduce',
+    ...(touch ? { hasTouch: true, isMobile: true } : {}) }); contexts.push(context);
   await context.addInitScript(theme => localStorage.setItem('mhub-library-theme', theme), theme);
   await context.route('**/*', route => {
     const url = new URL(route.request().url());
@@ -123,7 +125,7 @@ async function focusGeometry(page) {
     return { id: element.id, tag: element.tagName, name: element.getAttribute('aria-label') || element.textContent.trim().slice(0, 90),
       visible: Boolean(element.getClientRects().length), disabled: Boolean(element.disabled), top: rect.top, bottom: rect.bottom,
       left: rect.left, right: rect.right, outline: style.outlineStyle,
-      unobscured: rect.top >= 0 && rect.bottom <= (element.closest('main') ? player.top : innerHeight) + 1 && rect.left >= 0 && rect.right <= innerWidth + 1 };
+      unobscured: rect.top >= 0 && rect.bottom <= (element.closest('main, .sidebar') ? player.top : innerHeight) + 1 && rect.left >= 0 && rect.right <= innerWidth + 1 };
   });
 }
 try {
@@ -152,7 +154,9 @@ try {
   check('unconfirmed login moves focus to account retry', (await focusGeometry(uncertain)).id === 'retry-session' && (await focusGeometry(uncertain)).unobscured, await focusGeometry(uncertain));
   await uncertain.keyboard.press('Enter');
   await uncertain.waitForFunction(() => window.libraryLab.snapshot().sessionState === 'ready');
-  check('account retry preserves a visible focus after its button disappears', (await focusGeometry(uncertain)).id === 'identity' && (await focusGeometry(uncertain)).unobscured, await focusGeometry(uncertain));
+  await uncertain.waitForFunction(() => document.activeElement.id === 'identity', { timeout: 2000 }).catch(() => {});
+  const retryFocus = await focusGeometry(uncertain);
+  check('account retry preserves a visible focus after its button disappears', retryFocus.id === 'identity' && retryFocus.unobscured, retryFocus);
 
   const playback = await fresh();
   await playback.locator('#results .play-track').first().focus(); await playback.keyboard.press('Enter');
@@ -186,6 +190,70 @@ try {
   await playback.waitForFunction(() => window.libraryLab.snapshot().state === 'playing' && window.libraryLab.snapshot().audio.some(a => !a.paused && a.time > .2));
   check('keyboard plays saved generated audio after offline reopen', await playback.evaluate(() => window.libraryLab.snapshot().offlineMode && window.libraryLab.snapshot().audio.some(a => a.source.startsWith('blob:') && !a.paused)));
   await playback.context().setOffline(false);
+
+  for (const [width, height] of [[844, 390], [1024, 600]]) {
+    const short = await fresh(width, height);
+    for (const showFailure of [false, true]) {
+      if (showFailure) {
+        failNextTask = true; await short.locator('#results .play-track').first().click();
+        await short.waitForFunction(() => !document.querySelector('#playback-feedback').hidden);
+      }
+      const entries = [];
+      await short.locator('.brand').focus();
+      for (let index = 0; index < 6; index++) {
+        entries.push(await focusGeometry(short)); await short.keyboard.press('Tab');
+      }
+      check('short-window sidebar focus stays above player ' + width + '/' + (showFailure ? 'error' : 'normal'), entries.every(e => e.unobscured), entries);
+      await short.screenshot({ path: path.join(output, `sidebar-${width}-${showFailure ? 'error' : 'normal'}.png`) });
+    }
+  }
+
+  const touch = await fresh(375, 812, 'dark', true);
+  await touch.locator('#results .play-track').first().tap();
+  await touch.waitForFunction(() => window.libraryLab.snapshot().state === 'playing' && window.libraryLab.snapshot().audio.some(a => !a.paused && a.time > .2));
+  await touch.locator('#transport').tap(); await touch.waitForFunction(() => window.libraryLab.snapshot().state === 'paused');
+  const touchCdp = await touch.context().newCDPSession(touch);
+  await touch.evaluate(() => {
+    window.__touchSeekEvents = [];
+    for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'input', 'change']) {
+      document.getElementById('seek').addEventListener(type, event => window.__touchSeekEvents.push({ type, pointerType: event.pointerType, value: event.target.value }));
+    }
+    for (const audio of document.querySelectorAll('audio')) audio.addEventListener('seeking', () => window.__touchSeekEvents.push({ type: 'seeking', time: audio.currentTime }));
+  });
+  async function touchSeek(target, cancel = false) {
+    const slider = touch.locator('#seek'), rect = await slider.boundingBox();
+    const values = await slider.evaluate(el => ({ value: Number(el.value), max: Number(el.max) }));
+    const point = ratio => ({ x: rect.x + 8 + (rect.width - 16) * ratio, y: rect.y + rect.height / 2, id: 1, radiusX: 1, radiusY: 1, force: 1 });
+    const start = values.value / values.max;
+    await touchCdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point(start)] });
+    for (let index = 1; index <= 5; index++) {
+      await touchCdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [point(start + (target - start) * index / 5)] });
+    }
+    const preview = await touch.evaluate(() => window.libraryLab.snapshot());
+    await touchCdp.send('Input.dispatchTouchEvent', { type: cancel ? 'touchCancel' : 'touchEnd', touchPoints: [] });
+    await touch.waitForTimeout(180);
+    return { preview, final: await touch.evaluate(() => window.libraryLab.snapshot()) };
+  }
+  const gesture = await touchSeek(.55);
+  const gestureEvents = await touch.evaluate(() => window.__touchSeekEvents.splice(0));
+  check('synthesized touch previews before committing one native seek', gesture.preview.seekInput.preview && !gesture.final.seekInput.editing
+    && Math.abs(gesture.final.seekInput.value - gesture.final.seekInput.max * .55) < 1
+    && gestureEvents.filter(e => e.type === 'seeking').length === 1 && gestureEvents.some(e => e.pointerType === 'touch'), gestureEvents);
+  const cancelled = await touchSeek(.8, true);
+  const cancelEvents = await touch.evaluate(() => window.__touchSeekEvents.splice(0));
+  check('touch cancellation discards preview without seeking', cancelled.preview.seekInput.preview && !cancelled.final.seekInput.editing
+    && Math.abs(cancelled.final.seekInput.value - gesture.final.seekInput.value) < .3 && !cancelEvents.some(e => e.type === 'seeking'), cancelEvents);
+  const resumed = await touchSeek(.25);
+  check('new touch gesture works after cancellation', !resumed.final.seekInput.editing && Math.abs(resumed.final.seekInput.value - resumed.final.seekInput.max * .25) < 1);
+  await touch.evaluate(() => window.__touchSeekEvents.splice(0));
+  const tapRect = await touch.locator('#seek').boundingBox();
+  await touch.touchscreen.tap(tapRect.x + 8 + (tapRect.width - 16) * .65, tapRect.y + tapRect.height / 2);
+  await touch.waitForTimeout(180);
+  const tapped = await touch.evaluate(() => ({ state: window.libraryLab.snapshot(), events: window.__touchSeekEvents.splice(0) }));
+  check('single touch tap seeks without requiring a drag', !tapped.state.seekInput.editing && tapped.state.state === 'paused'
+    && Math.abs(tapped.state.seekInput.value - tapped.state.seekInput.max * .65) < 1 && tapped.events.filter(e => e.type === 'seeking').length === 1, tapped.events);
+  await touchCdp.detach();
+  report.touchScope = 'CDP Input.dispatchTouchEvent on desktop Edge with touch/mobile context; no physical phone or lockscreen verification.';
 
   const configurations = [[1440, 1000, 'dark'], [1440, 1000, 'light'], [375, 812, 'dark'], [320, 700, 'light'], [844, 390, 'dark']];
   for (const [width, height, theme] of configurations) {
