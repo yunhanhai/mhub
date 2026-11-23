@@ -223,6 +223,21 @@ GitHub Actions 的 `accessibility` 作业在独立临时目录安装固定版本
 
 输出包括 `accessibility.json` 和截图。浏览器辅助功能树、DOM 的 ARIA 属性与实际读屏输出分别记录；当前 Edge 可能将滑块 `aria-valuetext` 映射为普通数值，因此不能用属性存在证明实际播报。键盘及自动规则检查不证明完整 WCAG 合规，也不替代 NVDA / VoiceOver、手机触摸、锁屏、后台或真实 Rust / Navidrome 授权链路验收。
 
+### 持续收听与资源采样
+
+```sh
+node scripts/library-lab/verify-listening-soak.mjs REPORT_DIR 1800
+node scripts/library-lab/summarize-listening-soak.mjs REPORT_DIR
+```
+
+第二个参数是实际持续时间，接受 48..14400 秒，默认 1800。在线、离线各占一半，按完整两曲循环结束，因此实际耗时会略长于配置；最后另验暂停、反复重选与离线重开。测试使用共享的 `browser-fixture.mjs` 生成 12 秒 MP3 / FLAC，明确模拟 API；每首以原速自然结束，不合成 `ended`、不跳到结尾。离线阶段只使用已显式保存且经 SHA-256 校验的副本，检查不再创建远端任务。与无障碍检查相同，支持已有 `PLAYWRIGHT_MODULE`、`BROWSER_EXECUTABLE`、`FFMPEG_EXECUTABLE`。
+
+`listening-soak.json` 每轮落盘，保留真实 EOF、500ms 进度观察汇总、任务及 Blob URL 所有权、每分钟 JS 堆、DOM 节点、监听器和渲染进程 CPU。Windows 同时采样这些渲染进程的工作集与私有内存；其他系统保留 CDP 指标，进程内存为 `null`。阶段端点和离线重开后显式 GC，其余样本不强制 GC；汇总脚本分别列出，不能混算为内存增减证据。CPU 只比较同一 ID 进程的相邻采样，另列新建、退出进程，不把少计的 CPU 当成性能改善。
+
+脚本要求每轮两次真实原速 EOF、资源所有权有界、不出现观测到的连续两秒媒体进度停滞，并保留全部失败。内存没有人为“合格阈值”，增长趋势需要结合周期、GC 和进程变化解释。数据只覆盖该隔离浏览器的两个合成原件；不证明数小时无泄漏、整机内存、真实用户容量、Rust / Navidrome 授权或手机后台。模拟 API 没有后端到期机制，断网丢失的清理请求可使其任务记录留到夹具关闭，不能据此推断真实后端清理结果。
+
+GitHub 的浏览器作业只运行 48 秒短程版本，覆盖真实自然续播、公开副本与退出清理；30 分钟及更长持续采样需单独运行。所有 JSON 与截图都是测试证据，不包含实际部署配置。
+
 ### 真实后端与曲库
 
 `scripts/library-lab/` 保留 Node 对照实现和同一组外部验收。为真实 Rust 程序运行检查时设置 `LIBRARY_BACKEND=rust`（PowerShell：`$env:LIBRARY_BACKEND = 'rust'`）：

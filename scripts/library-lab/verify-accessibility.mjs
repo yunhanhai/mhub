@@ -5,98 +5,23 @@
 // PLAYWRIGHT_MODULE, BROWSER_EXECUTABLE, AXE_CORE_PATH and FFMPEG_EXECUTABLE
 // may select existing local tools. No personal accounts or audio are used.
 import assert from 'node:assert/strict';
-import { createServer } from 'node:http';
-import { execFile } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { startBrowserFixture } from './browser-fixture.mjs';
 
 const output = process.argv[2];
 assert.ok(output, 'Expected REPORT_DIR');
 await mkdir(output, { recursive: true });
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const { chromium } = createRequire(import.meta.url)(process.env.PLAYWRIGHT_MODULE || 'playwright');
-const audio = await new Promise((resolve, reject) => execFile(process.env.FFMPEG_EXECUTABLE || 'ffmpeg',
-  ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'sine=frequency=220:duration=30', '-ar', '44100', '-ac', '1', '-f', 'mp3', 'pipe:1'],
-  { encoding: 'buffer', timeout: 30000, maxBuffer: 2 * 1024 * 1024, windowsHide: true },
-  (error, stdout) => error ? reject(error) : resolve(stdout)));
-const version = createHash('sha256').update(audio).digest('hex');
-const instanceId = 'accessibility-interface-fixture';
-const tracks = ['First Light', 'Slow River'].map((title, index) => {
-  const songId = 'synthetic-' + index;
-  const id = 'library-lab:' + [instanceId, songId, version, 'raw'].map(encodeURIComponent).join(':');
-  return { id, source_id: id, instanceId, songId, version, platform: 'navidrome', quality: 'raw', title,
-    artist: 'Generated interface fixture', album: 'Keyboard verification', duration: 30000,
-    format: 'mp3', content_type: 'audio/mpeg', byte_size: audio.length, access: 'public', offlineAllowed: true, streaming_mode: '' };
-});
-const users = new Map(), tasks = new Map(), checks = [], errors = [], scans = [], contexts = [], keyboardPaths = [];
-let sessionDelay = 0, failNextMutation = false, failNextTask = false;
-const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
-const json = (response, status, value, headers = {}) => {
-  response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers });
-  response.end(JSON.stringify(value));
-};
-const server = createServer(async (request, response) => {
-  try {
-    const url = new URL(request.url, 'http://127.0.0.1');
-    const session = /(?:^|;\s*)interface_fixture=([^;]+)/.exec(request.headers.cookie || '')?.[1];
-    if (url.pathname === '/api/v1/library/session') {
-      const wait = sessionDelay;
-      if (wait) await delay(wait);
-      if (request.method === 'POST') {
-        let body = ''; for await (const chunk of request) body += chunk;
-        if (failNextMutation) { failNextMutation = false; return json(response, 503, { error: { code: 'unavailable', message: '测试账号确认暂时不可用。' } }); }
-        const input = JSON.parse(body);
-        if (input.username !== 'fixture' || input.password !== 'fixture') return json(response, 401, { error: { code: 'source_auth', message: '账号或密码不正确，请重新输入。' } });
-        const token = randomUUID(); users.set(token, { id: 'fixture-user', username: 'fixture' });
-        return json(response, 200, { instanceId, user: users.get(token) }, { 'Set-Cookie': 'interface_fixture=' + token + '; HttpOnly; SameSite=Strict; Path=/' });
-      }
-      if (request.method === 'DELETE') { users.delete(session); return json(response, 200, { user: null }); }
-      return json(response, 200, { instanceId, user: users.get(session) || null });
-    }
-    if (url.pathname === '/api/v1/library/search') return json(response, 200, { instanceId, tracks });
-    if (url.pathname === '/api/v1/library/tasks' && request.method === 'POST') {
-      let body = ''; for await (const chunk of request) body += chunk;
-      const input = JSON.parse(body), track = tracks.find(t => t.songId === input.songId);
-      if (!track) return json(response, 404, { error: { code: 'track_missing', message: '没有这首测试曲目' } });
-      if (failNextTask) { failNextTask = false; return json(response, 503, { error: { code: 'source_unavailable', message: '测试音频暂时不可用，请重试播放。' } }); }
-      const id = randomUUID().replaceAll('-', ''); tasks.set(id, track);
-      return json(response, 200, { id, state: 'ready', track, mediaUrl: origin + '/api/v1/library/tasks/' + id + '/audio' });
-    }
-    const taskMatch = /^\/api\/v1\/library\/tasks\/([^/]+)(\/audio)?$/.exec(url.pathname);
-    if (taskMatch) {
-      const [, id, media] = taskMatch;
-      if (request.method === 'DELETE') { tasks.delete(id); return json(response, 200, {}); }
-      const track = tasks.get(id);
-      if (!track) return json(response, 404, { error: { code: 'task_missing', message: '测试任务已结束' } });
-      if (!media) return json(response, 200, { id, state: 'ready', track, mediaUrl: origin + url.pathname + '/audio' });
-      const range = /^bytes=(\d+)-(\d*)$/.exec(request.headers.range || '');
-      const start = range ? Number(range[1]) : 0, end = range && range[2] ? Math.min(Number(range[2]), audio.length - 1) : audio.length - 1;
-      if (start >= audio.length) { response.writeHead(416, { 'Content-Range': 'bytes */' + audio.length }); return response.end(); }
-      response.writeHead(range ? 206 : 200, { 'Content-Type': 'audio/mpeg', 'Content-Length': end - start + 1, 'Accept-Ranges': 'bytes',
-        'Cache-Control': 'no-store', ...(range ? { 'Content-Range': `bytes ${start}-${end}/${audio.length}` } : {}) });
-      return response.end(request.method === 'HEAD' ? undefined : audio.subarray(start, end + 1));
-    }
-    if (!url.pathname.startsWith('/library/')) { response.writeHead(404); return response.end(); }
-    const name = url.pathname.slice('/library/'.length) || 'index.html';
-    if (!/^[\w.-]+$/.test(name)) { response.writeHead(404); return response.end(); }
-    const bytes = await readFile(path.join(root, 'web/library', name));
-    const type = name.endsWith('.html') ? 'text/html; charset=utf-8' : name.endsWith('.js') ? 'application/javascript' : name.endsWith('.png') ? 'image/png' : 'application/manifest+json';
-    response.writeHead(200, { 'Content-Type': type, 'Content-Length': bytes.length, 'Cache-Control': 'no-store' }); response.end(bytes);
-  } catch (error) {
-    if (!response.headersSent) response.writeHead(error.code === 'ENOENT' ? 404 : 500);
-    response.end();
-  }
-});
-await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-const origin = 'http://127.0.0.1:' + server.address().port;
+const fixture = await startBrowserFixture();
+const { origin, control } = fixture;
+const checks = [], errors = [], scans = [], contexts = [], keyboardPaths = [];
 let browser;
 try {
   browser = await chromium.launch({ headless: true, ...(process.env.BROWSER_EXECUTABLE ? { executablePath: process.env.BROWSER_EXECUTABLE } : {}) });
 } catch (error) {
-  server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); throw error;
+  await fixture.close(); throw error;
 }
 const report = { startedAt: new Date().toISOString(), checks, errors, scans, keyboardPaths,
   browser: { engine: 'Chromium', version: browser.version(), executableSpecified: Boolean(process.env.BROWSER_EXECUTABLE) },
@@ -143,14 +68,14 @@ try {
   check('keyboard login retains visible account focus', (await focusGeometry(page)).id === 'identity' && (await focusGeometry(page)).unobscured, await focusGeometry(page));
   await page.locator('#logout').focus(); await page.keyboard.press('Enter'); await page.waitForFunction(() => !window.libraryLab.snapshot().user && window.libraryLab.snapshot().sessionState === 'ready');
   check('keyboard logout returns focus to username', (await focusGeometry(page)).id === 'username' && (await focusGeometry(page)).unobscured, await focusGeometry(page));
-  sessionDelay = 250;
+  control.sessionDelay = 250;
   await enterCredentials(page); await page.locator('#query').focus();
   await page.waitForFunction(() => window.libraryLab.snapshot().user?.id === 'fixture-user');
   check('completed login does not steal focus moved to search', await page.evaluate(() => document.activeElement.id === 'query'));
-  sessionDelay = 0;
+  control.sessionDelay = 0;
 
   const uncertain = await fresh();
-  failNextMutation = true; await enterCredentials(uncertain);
+  control.failNextMutation = true; await enterCredentials(uncertain);
   await uncertain.waitForFunction(() => window.libraryLab.snapshot().sessionState === 'unavailable');
   check('unconfirmed login moves focus to account retry', (await focusGeometry(uncertain)).id === 'retry-session' && (await focusGeometry(uncertain)).unobscured, await focusGeometry(uncertain));
   await uncertain.keyboard.press('Enter');
@@ -196,7 +121,7 @@ try {
     const short = await fresh(width, height);
     for (const showFailure of [false, true]) {
       if (showFailure) {
-        failNextTask = true; await short.locator('#results .play-track').first().click();
+        control.failNextTask = true; await short.locator('#results .play-track').first().click();
         await short.waitForFunction(() => !document.querySelector('#playback-feedback').hidden);
       }
       const entries = [];
@@ -301,8 +226,8 @@ try {
 } catch (error) { report.failure = error.message; report.stack = error.stack; }
 finally {
   await Promise.allSettled(contexts.map(context => context.close())); await browser.close();
-  server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
-  tasks.clear(); users.clear(); report.fixtureClosed = true;
+  await fixture.close();
+  report.fixtureClosed = true;
 }
 report.finishedAt = new Date().toISOString(); report.passed = !report.failure && checks.every(c => c.passed); report.checkCount = checks.length;
 await writeFile(path.join(output, 'accessibility.json'), JSON.stringify(report, null, 2) + '\n');

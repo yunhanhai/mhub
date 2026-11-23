@@ -55,6 +55,12 @@ jobs:
           PLAYWRIGHT_MODULE: ${{ runner.temp }}/mhub-browser-check/node_modules/playwright
           AXE_CORE_PATH: ${{ runner.temp }}/mhub-browser-check/node_modules/axe-core/axe.min.js
         run: node scripts/library-lab/verify-accessibility.mjs "$RUNNER_TEMP/mhub-accessibility-report"
+      - name: Check natural playback and resource cleanup
+        env:
+          PLAYWRIGHT_MODULE: ${{ runner.temp }}/mhub-browser-check/node_modules/playwright
+        run: |
+          node scripts/library-lab/verify-listening-soak.mjs "$RUNNER_TEMP/mhub-accessibility-report/listening-smoke" 48
+          node scripts/library-lab/summarize-listening-soak.mjs "$RUNNER_TEMP/mhub-accessibility-report/listening-smoke"
       - name: Retain interface verification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
