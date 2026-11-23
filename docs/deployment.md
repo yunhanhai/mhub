@@ -204,6 +204,23 @@ python3 scripts/library-lab/scan_library.py /music \
 
 ## 授权曲库验证
 
+### 键盘与无障碍界面
+
+先构建页面，再用已有 Playwright、Chromium / Edge 和 FFmpeg 运行独立界面验收：
+
+```sh
+npm --prefix frontend run build
+node scripts/library-lab/verify-accessibility.mjs REPORT_DIR
+```
+
+可用 `PLAYWRIGHT_MODULE`、`BROWSER_EXECUTABLE`、`FFMPEG_EXECUTABLE` 指定已有工具；设置 `AXE_CORE_PATH` 为本地 `axe-core` 的 `axe.min.js` 路径后，追加 WCAG A / AA 自动规则扫描。未提供该路径时不运行 axe，不能把其他检查通过称为 axe 通过。工具不自动安装依赖，也不需要真实账号或运行中的曲库。
+
+该脚本启动仅监听回环的模拟接口，使用两条明确标记的元数据与同一份合成 MP3，操作实际构建页面、原生音频、IndexedDB 和 Service Worker。覆盖跳过导航、登录失败说明、登录/退出/重试后的焦点、请求期间主动转移焦点、键盘跳转、队列移除、公开副本保存及离线重开。五种窗口与主题逐项检查 Tab 路径、焦点环、固定播放栏避让、菜单 Escape 和水平溢出；720×500、360×250 CSS 视口是 1440×1000 在 200% / 400% 浏览器缩放下的布局等效检查，不是真正操作浏览器缩放按钮，也不等同于仅放大文字。
+
+输出包括 `accessibility.json` 和截图。浏览器辅助功能树、DOM 的 ARIA 属性与实际读屏输出分别记录；当前 Edge 可能将滑块 `aria-valuetext` 映射为普通数值，因此不能用属性存在证明实际播报。键盘及自动规则检查不证明完整 WCAG 合规，也不替代 NVDA / VoiceOver、手机触摸、锁屏、后台或真实 Rust / Navidrome 授权链路验收。
+
+### 真实后端与曲库
+
 `scripts/library-lab/` 保留 Node 对照实现和同一组外部验收。为真实 Rust 程序运行检查时设置 `LIBRARY_BACKEND=rust`（PowerShell：`$env:LIBRARY_BACKEND = 'rust'`）：
 
 ```sh

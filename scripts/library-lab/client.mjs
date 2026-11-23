@@ -719,7 +719,7 @@ function updateTrackRow(node, track, saved) {
     view.access = track.access; view.permission.innerHTML = iconMarkup(track.access === 'public' ? 'check' : 'lock');
     view.permission.append(document.createTextNode(track.access === 'public' ? '公开' : '仅授权账号'));
   }
-  const duration = formatDuration(track.duration); text(view.duration, duration); view.duration.setAttribute('aria-label', '时长 ' + duration);
+  text(view.duration, formatDuration(track.duration));
   view.play.dataset.playKey = libraryTrackKey(track); view.play.dataset.playTitle = track.title;
   view.summary.setAttribute('aria-label', '安排播放 ' + track.title);
   for (const [button, label] of view.menuActions) button.setAttribute('aria-label', label + ' ' + track.title);
@@ -752,8 +752,10 @@ function row(track, saved = false) {
   permission.innerHTML = iconMarkup(track.access === 'public' ? 'check' : 'lock');
   permission.append(document.createTextNode(track.access === 'public' ? '公开' : '仅授权账号'));
   meta.append(format, permission); text.append(title, detail, album, meta); album.hidden = !album.textContent; info.append(cover, text);
-  const duration = document.createElement('span'); duration.className = 'track-time'; duration.textContent = formatDuration(track.duration);
-  duration.setAttribute('aria-label', '时长 ' + duration.textContent);
+  const duration = document.createElement('span'); duration.className = 'track-time';
+  const durationLabel = document.createElement('span'); durationLabel.className = 'sr-only'; durationLabel.textContent = '时长 ';
+  const durationValue = document.createElement('span'); durationValue.textContent = formatDuration(track.duration);
+  duration.append(durationLabel, durationValue);
   const actions = document.createElement('div'); actions.className = 'actions';
   const play = document.createElement('button'); play.innerHTML = iconMarkup('play');
   const playLabel = document.createElement('span'); playLabel.className = 'play-label'; playLabel.textContent = '播放'; play.append(playLabel); play.className = 'button primary play-track';
@@ -776,7 +778,7 @@ function row(track, saved = false) {
   }
   options.ontoggle = () => { if (options.open) for (const other of document.querySelectorAll('.track-options[open]')) if (other !== options) other.open = false; };
   options.append(summary, menu); actions.append(options); node.dataset.trackKey = libraryTrackKey(track);
-  const view = { track, saved, title, detail, album, cover, format, permission, duration, play, actions, options, summary, menuActions };
+  const view = { track, saved, title, detail, album, cover, format, permission, duration: durationValue, play, actions, options, summary, menuActions };
   trackRows.set(node, view);
   node.append(info, duration, actions); updateTrackRow(node, track, saved); return node;
 }
@@ -1024,6 +1026,12 @@ function sessionValue(value) {
   return value;
 }
 async function performSession(method = 'GET', data, { stop = false, keepPublicBlob = false } = {}) {
+  const focus = document.activeElement;
+  let ownsFocus = method !== 'GET' && Boolean(focus?.closest('#account-section'));
+  const relinquishFocus = event => {
+    if (!event.target.closest?.('#account-section')) ownsFocus = false;
+  };
+  if (ownsFocus) document.addEventListener('focusin', relinquishFocus);
   sessionController?.abort();
   if (stop) invalidate(!(keepPublicBlob && publicBlobIsAttached()), !keepPublicBlob);
   if (stop && keepPublicBlob && publicBlobIsAttached()) queueControl.restrictOffline(offline.map(item => item.track), true);
@@ -1064,8 +1072,18 @@ async function performSession(method = 'GET', data, { stop = false, keepPublicBl
       handleError(error);
     }
   } finally {
+    document.removeEventListener('focusin', relinquishFocus);
     pending.delete(controller); if (sessionController === controller) sessionController = null;
-    if (revision === sessionRevision) { changingIdentity = false; renderIdentity(); if (sessionState === 'unavailable') renderTracks(); }
+    if (revision === sessionRevision) {
+      changingIdentity = false; renderIdentity(); if (sessionState === 'unavailable') renderTracks();
+      // The submitting control may have been disabled or hidden. Keep keyboard
+      // users in the account flow without overriding a deliberate focus move.
+      if (ownsFocus && (document.activeElement === focus || document.activeElement === document.body)) {
+        const target = libraryOffline ? $('identity') : sessionState === 'unavailable' ? $('retry-session')
+          : user ? $('identity') : method === 'POST' && !$('login-error').hidden ? $('password') : $('username');
+        target.focus({ preventScroll: true }); keepFocusedControlVisible();
+      }
+    }
   }
   // Catalogue failures are independent of a successfully confirmed session.
   if ((confirmed || sessionState === 'ready') && revision === sessionRevision && !libraryOffline) {
@@ -1249,6 +1267,7 @@ setInterval(() => {
   for (const track of document.querySelectorAll('.track')) setClass(track, 'is-current', Boolean(media.track) && track.dataset.trackKey === libraryTrackKey(media.track));
   iconButtonContent($('mute-toggle'), status.volume > 0 ? 'volume' : 'muted', status.volume > 0 ? '静音' : '恢复音量');
   if (document.activeElement !== $('volume') && Number($('volume').value) !== status.volume) $('volume').value = status.volume;
+  setAttribute($('volume'), 'aria-valuetext', Math.round(status.volume * 100) + '%');
   renderSeek();
 }, 150);
 // Read-only diagnostics for repeatable browser evidence; no credentials here.
