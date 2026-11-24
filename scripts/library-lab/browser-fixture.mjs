@@ -17,7 +17,7 @@ async function generatedAudio(format, duration, frequency) {
     (error, stdout) => error ? reject(error) : resolve(stdout)));
 }
 
-export async function startBrowserFixture({ durationSeconds = 30, formats = ['mp3', 'mp3'] } = {}) {
+export async function startBrowserFixture({ durationSeconds = 30, formats = ['mp3', 'mp3'], artwork = false } = {}) {
   if (!Number.isInteger(durationSeconds) || durationSeconds < 3 || durationSeconds > 30
     || formats.length !== 2 || formats.some(f => !['mp3', 'flac'].includes(f))) throw new Error('Invalid generated fixture dimensions');
   const instanceId = 'accessibility-interface-fixture';
@@ -33,8 +33,16 @@ export async function startBrowserFixture({ durationSeconds = 30, formats = ['mp
       access: 'public', offlineAllowed: true, streaming_mode: '' };
   });
   const users = new Map(), tasks = new Map();
-  const control = { sessionDelay: 0, failNextMutation: false, failNextTask: false };
-  const counts = { taskCreates: 0, taskDeletes: 0, mediaResponses: 0, mediaActive: 0, peakTasks: 0, peakMedia: 0, requests: 0 };
+  const cover = artwork ? await new Promise((resolve, reject) => execFile(process.env.FFMPEG_EXECUTABLE || 'ffmpeg',
+    ['-hide_banner', '-loglevel', 'error', '-f', 'lavfi', '-i', 'color=c=green:s=16x16', '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1'],
+    { encoding: 'buffer', timeout: 30000, windowsHide: true, maxBuffer: 65536 }, (error, stdout) => error ? reject(error) : resolve(stdout))) : null;
+  if (cover) for (const track of tracks) {
+    track.artwork = { sha256: createHash('sha256').update(cover).digest('hex'), size: cover.length, width: 16, height: 16, contentType: 'image/jpeg' };
+    track.cover_url = '/api/v1/library/artwork/' + track.songId + '?instanceId=' + instanceId + '&version=' + track.version;
+  }
+  const control = { sessionDelay: 0, failNextMutation: false, failNextTask: false, artworkMode: 'normal' };
+  const counts = { taskCreates: 0, taskDeletes: 0, mediaResponses: 0, mediaActive: 0, peakTasks: 0, peakMedia: 0,
+    requests: 0, artworkRequests: 0, artworkActive: 0, artworkClosed: 0 };
   const json = (response, status, value, headers = {}) => {
     response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers });
     response.end(JSON.stringify(value));
@@ -59,6 +67,15 @@ export async function startBrowserFixture({ durationSeconds = 30, formats = ['mp
         return json(response, 200, { instanceId, user: users.get(session) || null });
       }
       if (url.pathname === '/api/v1/library/search') return json(response, 200, { instanceId, tracks });
+      if (url.pathname.startsWith('/api/v1/library/artwork/') && cover) {
+        const track = tracks.find(t => url.pathname.endsWith('/' + t.songId));
+        if (!track || url.searchParams.get('instanceId') !== instanceId || url.searchParams.get('version') !== track.version) return json(response, 404, {});
+        counts.artworkRequests++; counts.artworkActive++;
+        response.once('close', () => { counts.artworkActive--; counts.artworkClosed++; });
+        response.writeHead(200, { 'Content-Type': 'image/jpeg', 'Content-Length': cover.length, 'Cache-Control': 'no-store' });
+        if (control.artworkMode === 'stall') { response.flushHeaders(); return; }
+        return response.end(cover);
+      }
       if (url.pathname === '/api/v1/library/tasks' && request.method === 'POST') {
         let body = ''; for await (const chunk of request) body += chunk;
         const input = JSON.parse(body), track = tracks.find(t => t.songId === input.songId);

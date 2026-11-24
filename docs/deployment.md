@@ -223,6 +223,14 @@ GitHub Actions 的 `accessibility` 作业在独立临时目录安装固定版本
 
 输出包括 `accessibility.json` 和截图。浏览器辅助功能树、DOM 的 ARIA 属性与实际读屏输出分别记录；当前 Edge 可能将滑块 `aria-valuetext` 映射为普通数值，因此不能用属性存在证明实际播报。键盘及自动规则检查不证明完整 WCAG 合规，也不替代 NVDA / VoiceOver、手机触摸、锁屏、后台或真实 Rust / Navidrome 授权链路验收。
 
+### 可选封面失败恢复
+
+```sh
+node scripts/library-lab/verify-artwork-recovery.mjs REPORT_DIR
+```
+
+沿用已有 Playwright、浏览器和 FFmpeg 配置，生成16×16 JPEG及合成MP3，启动仅回环的模拟接口。检查有效封面显示、仅响应头后停流不阻止播放/保存、没有封面的音频断网重开仍可播放，以及人为挂起图片解码时取消保存及时解除等待、保留完整音频并恢复焦点。JSON明确记录故障注入和浏览器版本；不使用真实曲库账号，不等同于真实源授权或手机验收。此脚本同时加入 GitHub 浏览器作业并保留报告；单测另覆盖不响应中止的网络/存储、迟到位图释放、共享请求独立取消和超长正文。
+
 ### 持续收听与资源采样
 
 ```sh

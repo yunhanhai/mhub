@@ -561,7 +561,7 @@ async function saveOffline(track) {
       if (!hasCachedAudio(stored) || stored.blob.size !== track.byte_size) throw new Error('本地存储未能保留音频，请腾出空间后重试。');
       wrote = true; update({ wrote: true, phase: 'finishing' });
       current(epoch, signal);
-      const artwork = await artworkCache.get(ready); current(epoch, signal);
+      const artwork = await artworkCache.get(ready, { signal }); current(epoch, signal);
       await putCachedTrack(keyFor(track), { track: ready, ...(artwork ? { artwork_blob: artwork.blob } : {}) }, { signal });
       current(epoch, signal); await refreshOffline(); refreshed = true; current(epoch, signal); notice('已保存 ' + track.title);
     } finally {
