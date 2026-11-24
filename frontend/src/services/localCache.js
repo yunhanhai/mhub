@@ -9,6 +9,21 @@ let cachedDatabase;
 let trimPromise = Promise.resolve();
 const activeAudioDownloads = new Map();
 
+// Shared database opening and eviction may outlive one caller. Cancellation
+// releases that caller without closing another operation's database or work.
+function waitForStorage(pending, signal) {
+  if (!signal) return pending;
+  return new Promise((resolve, reject) => {
+    const cancelled = () => { signal.removeEventListener("abort", cancelled); reject(signal.reason); };
+    if (signal.aborted) cancelled();
+    else signal.addEventListener("abort", cancelled, { once: true });
+    Promise.resolve(pending).then(value => {
+      signal.removeEventListener("abort", cancelled);
+      if (signal.aborted) reject(signal.reason); else resolve(value);
+    }, error => { signal.removeEventListener("abort", cancelled); reject(signal.aborted ? signal.reason : error); });
+  });
+}
+
 function releaseDatabase(db) {
   if (cachedDatabase === db) { cachedDatabase = null; dbPromise = null; }
   db.close();
@@ -48,9 +63,9 @@ function openDb() {
   return opening;
 }
 
-function tx(mode, handler, { signal, timeoutMs = mode === "readonly" ? 3000 : 0 } = {}) {
+function tx(mode, handler, { signal, timeoutMs = mode === "readonly" ? 3000 : 10000 } = {}) {
   signal?.throwIfAborted();
-  const execute = retry => openDb().then(
+  const execute = retry => waitForStorage(openDb(), signal).then(
     (db) =>
       new Promise((resolve, reject) => {
         signal?.throwIfAborted();
@@ -85,7 +100,8 @@ function tx(mode, handler, { signal, timeoutMs = mode === "readonly" ? 3000 : 0 
         transaction.onerror = (event) => fail(event.target.error || transaction.error || new Error("音频缓存操作失败"));
         transaction.onabort = () => finish(reject, transaction.error || new Error("音频缓存写入已取消"));
         signal?.addEventListener("abort", cancelled, { once: true });
-        if (timeoutMs) timer = setTimeout(() => fail(new DOMException("本地音频存储读取超时，请重试", "TimeoutError")), timeoutMs);
+        if (timeoutMs) timer = setTimeout(() => fail(new DOMException(mode === "readonly"
+          ? "本地音频存储读取超时，请重试" : "本地音频存储写入超时，请重试", "TimeoutError")), timeoutMs);
         try { result = handler(transaction.objectStore(STORE), fail); } catch (error) { fail(error); }
       }),
   );
@@ -111,7 +127,7 @@ export function getCachedTrack(key, options) {
   return tx("readonly", (store) => store.get(key), options);
 }
 
-export async function putCachedTrack(key, value, { signal } = {}) {
+export async function putCachedTrack(key, value, { signal, onCommit } = {}) {
   if (!key) return null;
   const hasIncomingBlob = Object.prototype.hasOwnProperty.call(value || {}, "blob");
   let hadBlob = false;
@@ -138,14 +154,18 @@ export async function putCachedTrack(key, value, { signal } = {}) {
       } catch (error) { fail(error); }
     };
   }, { signal });
+  // The transaction has committed before optional eviction/readback.
+  // Callers can distinguish cancelling a write from cancelling its aftermath.
+  onCommit?.();
   // Serialise eviction passes. Several player paths can finish at the same
   // time (active-track cache plus a prefetch), and concurrent trim scans used
   // to race and occasionally evict a record written by the other scan.
   if (hasIncomingBlob || !hadBlob) {
     trimPromise = trimPromise.catch(() => {}).then(() => trimCache());
-    await trimPromise;
+    await waitForStorage(trimPromise, signal);
   }
-  return getCachedTrack(key).catch(() => null);
+  signal?.throwIfAborted();
+  return getCachedTrack(key, { signal }).catch(error => { if (signal?.aborted) throw signal.reason; return null; });
 }
 
 export async function touchCachedTrack(key) {

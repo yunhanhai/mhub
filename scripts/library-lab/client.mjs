@@ -557,7 +557,8 @@ async function saveOffline(track) {
       update({ phase: 'writing' });
       // These bytes were verified above. Replace a damaged same-key record instead of reusing it by MIME alone.
       const stored = await putCachedTrack(keyFor(track), { task: ready, track: ready, blob,
-        content_type: ready.content_type, byte_size: blob.size, cached_audio_at: Date.now() }, { signal });
+        content_type: ready.content_type, byte_size: blob.size, cached_audio_at: Date.now() },
+        { signal, onCommit: () => { wrote = true; update({ wrote: true }); } });
       if (!hasCachedAudio(stored) || stored.blob.size !== track.byte_size) throw new Error('本地存储未能保留音频，请腾出空间后重试。');
       wrote = true; update({ wrote: true, phase: 'finishing' });
       current(epoch, signal);
