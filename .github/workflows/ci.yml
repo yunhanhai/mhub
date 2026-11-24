@@ -9,7 +9,7 @@ permissions:
   contents: read
 jobs:
   rust:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends protobuf-compiler libssl-dev pkg-config ffmpeg
@@ -21,6 +21,12 @@ jobs:
       - run: cargo +1.96.0 test --locked
       - run: cargo +1.96.0 test --manifest-path wasm/alac-decoder/Cargo.toml --locked
       - run: cargo +1.96.0 build --locked --bin music-api
+      - name: Share the verified Rust binary with real-source checks
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: rust-integration-binary
+          path: target/debug/music-api
+          retention-days: 1
       - name: Verify real Rust library HTTP contract
         env:
           LIBRARY_BACKEND: rust
@@ -88,6 +94,48 @@ jobs:
         with:
           name: accessibility-evidence
           path: ${{ runner.temp }}/mhub-accessibility-report
+          if-no-files-found: ignore
+          retention-days: 7
+  navidrome:
+    needs: rust
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: rust-integration-binary
+          path: ${{ runner.temp }}/mhub-real-source-tools
+      - run: npm --prefix frontend ci --no-audit --no-fund
+      - run: npm --prefix frontend run build
+      - name: Prepare pinned real-source tools
+        run: |
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends ffmpeg
+          npm install --prefix "$RUNNER_TEMP/mhub-browser-check" --no-save --ignore-scripts --no-audit --no-fund playwright@1.56.1
+          "$RUNNER_TEMP/mhub-browser-check/node_modules/.bin/playwright" install --with-deps chromium
+          curl --fail --location --retry 3 --connect-timeout 15 --max-time 180 https://github.com/navidrome/navidrome/releases/download/v0.64.2/navidrome_0.64.2_linux_amd64.tar.gz -o "$RUNNER_TEMP/navidrome.tar.gz"
+          echo "fdd87fd107818667c2c50bc24dc6ce856962c795b3822a91f95c066cfad2c53e  $RUNNER_TEMP/navidrome.tar.gz" | sha256sum --check -
+          tar -xzf "$RUNNER_TEMP/navidrome.tar.gz" -C "$RUNNER_TEMP/mhub-real-source-tools" navidrome
+          chmod +x "$RUNNER_TEMP/mhub-real-source-tools/music-api" "$RUNNER_TEMP/mhub-real-source-tools/navidrome"
+      - name: Verify real Navidrome, Rust and browser integration
+        env:
+          LIBRARY_BACKEND: rust
+          MHUB_RUST_BINARY: ${{ runner.temp }}/mhub-real-source-tools/music-api
+          NAVIDROME_EXECUTABLE: ${{ runner.temp }}/mhub-real-source-tools/navidrome
+          PLAYWRIGHT_MODULE: ${{ runner.temp }}/mhub-browser-check/node_modules/playwright
+        run: node scripts/library-lab/verify-navidrome-integration.mjs "$RUNNER_TEMP/mhub-navidrome-report"
+      - name: Retain real-source evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: navidrome-integration-evidence
+          path: ${{ runner.temp }}/mhub-navidrome-report
           if-no-files-found: ignore
           retention-days: 7
   docker:

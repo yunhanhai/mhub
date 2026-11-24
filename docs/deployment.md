@@ -248,6 +248,20 @@ GitHub 的浏览器作业只运行 48 秒短程版本，覆盖真实自然续播
 
 ### 真实后端与曲库
 
+完整的无私人数据集成检查会启动一套全新的 Navidrome、Rust 服务和隔离浏览器：
+
+```sh
+cargo build --locked --bin music-api
+npm --prefix frontend run build
+LIBRARY_BACKEND=rust NAVIDROME_EXECUTABLE=/path/to/navidrome node scripts/library-lab/verify-navidrome-integration.mjs REPORT_DIR
+```
+
+需提供已有 Navidrome 0.64.2、FFmpeg 和 Playwright/Chromium；可用 `MHUB_RUST_BINARY`、`PLAYWRIGHT_MODULE`、`BROWSER_EXECUTABLE`、`FFMPEG_EXECUTABLE` 指定工具。脚本只在系统临时目录新建数据库、三首合成 MP3/FLAC、随机账号和策略缓存，用随机回环端口运行，不连接已有 Navidrome。外部服务、遥测与共享在该实例关闭，登录按8.5秒间隔进行，保留默认登录限频。
+
+准备时仅管理员发起扫描，播放使用独立非管理员服务账号与 A/B 用户。验证真实原件字节、账号目录、私有预热缓存与 Range、实际曲库授权撤销和恢复；浏览器实际播放、保存两首公开原件、断网重开后自然续播，以及私有音源退出清除和受限音频不写 IndexedDB。账号撤权使用新实例内的空曲库，并检查源端真实 HTTP 200 / Subsonic 错误70。已离线页面的取消请求可能无法送达，因此先记录残留，再用本次任务清单尽力取消，核对活跃 Rust 资源后关闭进程并删除整套自建临时实例。原始数据库和媒体不作为证据上传，报告只记录版本、哈希、检查和计数。
+
+GitHub 的 `navidrome` 作业依赖 Rust 作业成功，使用同次构建的二进制；下载固定版本 Navidrome 并验证官方发布包 SHA-256，在 Ubuntu 24.04/Chromium 运行同一脚本，将 `navidrome-integration-evidence` 保留7天。这个检查覆盖真实桌面链路，仍不证明公网 HTTPS、实际扬声器输出、读屏或手机锁屏/后台表现。
+
 无需真实账号的 Rust HTTP 契约检查可先运行：
 
 ```sh
