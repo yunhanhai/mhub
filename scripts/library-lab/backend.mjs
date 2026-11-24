@@ -37,7 +37,7 @@ export async function createBackend(config, options) {
   };
   try {
     await writeFile(configFile, JSON.stringify({ origin: options?.origin || origin, source: config.source, policyFile: config.policyFile, cacheDir: config.cacheDir, cacheMaxBytes: config.cacheMaxBytes,
-      sessionTtlSeconds: config.sessionTtlSeconds, taskTtlSeconds: config.taskTtlSeconds }), { mode: 0o600 });
+      sessionTtlSeconds: config.sessionTtlSeconds, taskTtlSeconds: config.taskTtlSeconds, artworkDir: config.artworkDir }), { mode: 0o600 });
     await writeFile(settings, '[library]\nconfig_file = ' + JSON.stringify(configFile.replaceAll('\\', '/')) + '\nexclusive = ' + Boolean(options?.exclusive) + '\n', { mode: 0o600 });
   } catch (error) { await removePrivate(); throw error; }
   let child, closing, processClosed = Promise.resolve(), logs = '', lastMetrics = {};

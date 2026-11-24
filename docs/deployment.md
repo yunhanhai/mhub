@@ -248,6 +248,19 @@ GitHub 的浏览器作业只运行 48 秒短程版本，覆盖真实自然续播
 
 ### 真实后端与曲库
 
+无需真实账号的 Rust HTTP 契约检查可先运行：
+
+```sh
+cargo build --locked --bin music-api
+LIBRARY_BACKEND=rust node scripts/library-lab/verify-rust-contract.mjs REPORT_DIR
+```
+
+PowerShell 先设置 `$env:LIBRARY_BACKEND = 'rust'`。`MHUB_RUST_BINARY` 可指定已经从当前源码构建的程序，`FFMPEG_EXECUTABLE` 可指定已有 FFmpeg。该检查启动真实 `music-api` 独立曲库进程与仅回环的模拟原生登录/Subsonic 上游，使用合成 MP3/JPEG、随机临时凭据和隔离的策略/缓存/封面目录。检查匿名与账号目录、源凭据不外泄、来源与实例/版本边界、私有缓存预热后的跨账号拒绝、Range/条件请求、封面授权、上游 HTTP 200 协议错误、原件 SHA 不符和退出失效。
+
+结束前先显式取消任务、退出会话，并核对真实 Rust 的活跃任务、会话、准备、媒体响应和文件租约为零，再停止自己启动的进程并清理生成目录。终态任务记录仍可按后端生命周期保留，不把它们计为活跃资源。报告只保留检查结果、程序哈希和脱敏的上游请求类型，不写入随机密码、salt、token 或 Cookie。GitHub Rust 作业运行同一检查，JSON 以 `rust-contract-evidence` 保留7天。
+
+这证明 Rust 服务对受控上游响应的行为，不等同于真实 Navidrome、HTTPS 反向代理、浏览器播放或真机验收。下面使用真实曲库的验证仍需自己的隔离服务和显式提供的私有配置。
+
 `scripts/library-lab/` 保留 Node 对照实现和同一组外部验收。为真实 Rust 程序运行检查时设置 `LIBRARY_BACKEND=rust`（PowerShell：`$env:LIBRARY_BACKEND = 'rust'`）：
 
 ```sh
