@@ -15,9 +15,10 @@ import { createAudioUrlPool, createOfflineOperations } from './operations.mjs';
 import { createLibraryRequest } from './request.mjs';
 import { createOfflineAudioDownload } from './download.mjs';
 import { createAudioVerifier } from './audio-integrity.mjs';
+import { createTaskPreparation } from './task-preparation.mjs';
 import { createPlayIntents } from './play-intent.mjs';
 import { createSeekInput } from './seek.mjs';
-import { playbackRecovery, failedPlaybackTask } from './playback-recovery.mjs';
+import { playbackRecovery } from './playback-recovery.mjs';
 
 setActivePinia(createPinia());
 const status = useStatusStore(), queue = useQueueStore(), media = useMediaStore();
@@ -71,7 +72,6 @@ const playbackControllers = new Set();
 const verifiedBlobs = new WeakSet();
 const channel = new BroadcastChannel('library-lab-session');
 const keyFor = track => representationKey(track.instanceId, track.songId, track.version);
-const select = track => ({ instanceId: track.instanceId, songId: track.songId, version: track.version });
 const request = createLibraryRequest({ apiBase, clientHeader });
 // The shared player reports transport failures through these store actions.
 // Route them to this page's visible player feedback without changing its core.
@@ -282,26 +282,8 @@ async function cachedSource(track, signal) {
   const source = audioUrls.create(item.blob);
   return { source, track: { ...track, cover: artwork?.url || '', status: 'completed' } };
 }
-async function readyTask(track, signal, epoch) {
-  let task;
-  try {
-    task = await request('/api/tasks', { method: 'POST', data: select(track), signal });
-    if (typeof task.id !== 'string' || !/^[A-Za-z0-9_-]{16,64}$/.test(task.id)) throw new Error('播放任务数据无效');
-    taskResources.set(task.id, { source: null, held: true, deliveredAt: performance.now() });
-    current(epoch, signal);
-    const deadline = Date.now() + 25000;
-    while (task.state === 'preparing') {
-      if (Date.now() > deadline) throw new Error('准备音频超时，请重试');
-      await new Promise(resolve => setTimeout(resolve, 100)); current(epoch, signal);
-      task = await request('/api/tasks/' + task.id, { signal }); current(epoch, signal);
-    }
-    if (task.state !== 'ready') throw failedPlaybackTask(task.error);
-    return task;
-  } catch (error) {
-    if (task?.id) releaseTask(task.id);
-    throw error;
-  }
-}
+const readyTask = createTaskPreparation({ request, releaseTask, checkCurrent: current,
+  ownTask: id => taskResources.set(id, { source: null, held: true, deliveredAt: performance.now() }) });
 player.initPlayer({ audio,
   resolveTrackSource: async track => {
     cancelPlaybackRequests();

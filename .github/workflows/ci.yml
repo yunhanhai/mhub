@@ -100,6 +100,10 @@ jobs:
         env:
           PLAYWRIGHT_MODULE: ${{ runner.temp }}/mhub-browser-check/node_modules/playwright
         run: node scripts/library-lab/verify-storage-recovery.mjs "$RUNNER_TEMP/mhub-accessibility-report/storage-recovery"
+      - name: Check total task preparation deadline and original task cleanup
+        env:
+          PLAYWRIGHT_MODULE: ${{ runner.temp }}/mhub-browser-check/node_modules/playwright
+        run: node scripts/library-lab/verify-task-preparation.mjs "$RUNNER_TEMP/mhub-accessibility-report/task-preparation"
       - name: Retain interface verification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
