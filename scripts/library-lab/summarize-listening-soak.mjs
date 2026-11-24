@@ -33,9 +33,13 @@ for (let index = 1; index < source.samples.length; index++) {
     scope: 'CPU deltas for renderer processes present at both endpoints only; exited/new process CPU and other browser processes excluded.' });
 }
 const phases = ['online', 'offline'].map(phase => {
-  const cycles = source.cycles.filter(c => c.phase === phase), values = samples.filter(s => s.phase.startsWith(phase + '-'));
+  const cycles = source.cycles.filter(c => c.phase === phase);
+  const values = samples.filter(s => s.phase === phase + '-periodic' && !s.garbageCollected);
+  const endpoint = samples.find(s => s.phase === phase + '-complete');
   return { phase, actualSeconds: source[phase + 'Seconds'], cycles: cycles.length,
     naturalEnds: cycles.reduce((n, cycle) => n + cycle.ended.length, 0),
+    sampleScope: 'Periodic samples without forced GC only; explicit phase endpoint and reopened samples are listed separately.',
+    collectedEndpoint: endpoint || null,
     heapBytes: stats(values.map(s => s.heapBytes)), nodes: stats(values.map(s => s.domNodes)), listeners: stats(values.map(s => s.listeners)),
     workingSetBytes: stats(values.map(s => s.rendererWorkingSetBytes)), privateBytes: stats(values.map(s => s.rendererPrivateBytes)),
     resources: Object.fromEntries(['audioUrls', 'mediaTasks', 'playbackRequests', 'offlineOperations'].map(key => [key,
