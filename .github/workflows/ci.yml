@@ -88,6 +88,10 @@ jobs:
         env:
           PLAYWRIGHT_MODULE: ${{ runner.temp }}/mhub-browser-check/node_modules/playwright
         run: node scripts/library-lab/verify-artwork-recovery.mjs "$RUNNER_TEMP/mhub-accessibility-report/artwork-recovery"
+      - name: Check control request deadlines, cancellation and manual recovery
+        env:
+          PLAYWRIGHT_MODULE: ${{ runner.temp }}/mhub-browser-check/node_modules/playwright
+        run: node scripts/library-lab/verify-request-recovery.mjs "$RUNNER_TEMP/mhub-accessibility-report/request-recovery"
       - name: Retain interface verification evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

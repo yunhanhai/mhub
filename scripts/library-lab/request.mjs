@@ -1,4 +1,20 @@
 // JSON control requests have their own bounds; media delivery keeps its separate lifecycle.
+function wait(pending, signal) {
+  return new Promise((resolve, reject) => {
+    const abort = () => { signal.removeEventListener('abort', abort); reject(signal.reason); };
+    if (signal.aborted) abort();
+    else signal.addEventListener('abort', abort, { once: true });
+    // Consume late failures even if cancellation happened before this wait began.
+    Promise.resolve(pending).then(value => {
+      signal.removeEventListener('abort', abort);
+      if (signal.aborted) reject(signal.reason); else resolve(value);
+    }, error => { signal.removeEventListener('abort', abort); reject(signal.aborted ? signal.reason : error); });
+  });
+}
+function cancelBody(body) {
+  try { void body?.cancel().catch(() => {}); } catch { /* Cleanup must not extend the deadline. */ }
+}
+
 export function createLibraryRequest({ apiBase, clientHeader, fetchImpl = (...args) => fetch(...args),
   timeoutMs = 25000, maxBytes = 1024 * 1024 } = {}) {
   return async function request(url, { method = 'GET', data, signal, credentials = 'same-origin' } = {}) {
@@ -9,10 +25,16 @@ export function createLibraryRequest({ apiBase, clientHeader, fetchImpl = (...ar
     const timer = setTimeout(() => controller.abort(new DOMException('连接曲库超时，请重试。', 'TimeoutError')), timeoutMs);
     let response, reader;
     try {
-      response = await fetchImpl(url.replace(/^\/api(?=\/)/, apiBase), { method, credentials,
+      const fetching = Promise.resolve(fetchImpl(url.replace(/^\/api(?=\/)/, apiBase), { method, credentials,
         cache: 'no-store', signal: controller.signal,
         headers: { [clientHeader]: '1', ...(data ? { 'content-type': 'application/json' } : {}) },
-        ...(data ? { body: JSON.stringify(data) } : {}) });
+        ...(data ? { body: JSON.stringify(data) } : {}) })).then(value => {
+        // Own the body before resuming the caller, or discard it if already cancelled.
+        // A transport may deliver headers long after the waiting caller has left.
+        if (controller.signal.aborted) cancelBody(value?.body); else response = value;
+        return value;
+      });
+      await wait(fetching, controller.signal);
       controller.signal.throwIfAborted();
       if (!response.headers.get('content-type')?.match(/^\s*application\/(?:json|[\w.+-]+\+json)\s*(?:;|$)/i)) {
         throw Object.assign(new Error('曲库响应格式无效，请稍后重试。'), { kind: 'protocol', status: response.status });
@@ -22,7 +44,7 @@ export function createLibraryRequest({ apiBase, clientHeader, fetchImpl = (...ar
       if (!reader) throw new Error('曲库响应为空，请重试。');
       const parts = []; let size = 0;
       for (;;) {
-        const { value, done } = await reader.read();
+        const { value, done } = await wait(reader.read(), controller.signal);
         if (done) break;
         size += value.byteLength;
         if (size > maxBytes) throw new Error('曲库响应超过允许的大小，请重试。');
@@ -50,7 +72,7 @@ export function createLibraryRequest({ apiBase, clientHeader, fetchImpl = (...ar
       // Cleanup is best effort and must not extend the control request deadline.
       try {
         if (reader) { void reader.cancel().catch(() => {}); reader.releaseLock(); }
-        else if (response?.body) void response.body.cancel().catch(() => {});
+        else cancelBody(response?.body);
       } catch { /* A completed or errored body may already be released. */ }
     }
   };
