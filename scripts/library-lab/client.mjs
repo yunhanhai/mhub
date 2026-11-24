@@ -14,6 +14,7 @@ import { BROWSE_PAGE_SIZE, albumChoices, browseTracks, safeBrowseSort } from './
 import { createAudioUrlPool, createOfflineOperations } from './operations.mjs';
 import { createLibraryRequest } from './request.mjs';
 import { createOfflineAudioDownload } from './download.mjs';
+import { createAudioVerifier } from './audio-integrity.mjs';
 import { createPlayIntents } from './play-intent.mjs';
 import { createSeekInput } from './seek.mjs';
 import { playbackRecovery, failedPlaybackTask } from './playback-recovery.mjs';
@@ -62,6 +63,7 @@ let renderedQueueState = '';
 const playIntents = createPlayIntents({ onChange: () => { syncPlaybackButtons(); renderQueue(); } });
 const storageOperations = createOfflineOperations({ onChange: () => { syncOfflineButtons(); renderSaveTransfers(); } });
 const downloadOfflineAudio = createOfflineAudioDownload();
+const verifyAudio = createAudioVerifier();
 const storageChannel = new BroadcastChannel('mhub-library-offline');
 const taskResources = new Map();
 let offlineRefreshId = 0;
@@ -259,8 +261,7 @@ async function cached(track, signal) {
   if (!hasCachedAudio(item) || item.track?.access !== 'public' || !item.track?.offlineAllowed || keyFor(item.track) !== keyFor(track)) return null;
   if (item.blob.size !== track.byte_size) throw Object.assign(new Error('离线音频大小不匹配，请联网后重新保存。'), { offlineIntegrity: true });
   if (!verifiedBlobs.has(item.blob)) {
-    const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await item.blob.arrayBuffer()))].map(value => value.toString(16).padStart(2, '0')).join('');
-    if (digest !== track.version) throw Object.assign(new Error('离线音频校验失败，请联网后重新保存。'), { offlineIntegrity: true });
+    await verifyAudio(item.blob, { expectedBytes: track.byte_size, sha256: track.version, signal }); current(epoch, signal);
     verifiedBlobs.add(item.blob);
   }
   return item;
@@ -550,9 +551,8 @@ async function saveOffline(track) {
       const blob = await downloadOfflineAudio(task.mediaUrl, { signal, expectedBytes: track.byte_size, contentType: task.track.content_type,
         onProgress: progress => update({ ...progress, phase: 'downloading' }, true) });
       current(epoch, signal); update({ phase: 'verifying' });
-      const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()))].map(v => v.toString(16).padStart(2, '0')).join('');
+      await verifyAudio(blob, { expectedBytes: track.byte_size, sha256: track.version, signal });
       current(epoch, signal);
-      if (blob.size !== track.byte_size || digest !== track.version) throw new Error('离线音频校验失败');
       const ready = { ...task.track, status: 'completed' };
       update({ phase: 'writing' });
       // These bytes were verified above. Replace a damaged same-key record instead of reusing it by MIME alone.
